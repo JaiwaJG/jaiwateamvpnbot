@@ -7,7 +7,7 @@ export const CONFIG = {
   REFERRAL_PERCENT: 5, // 5% Commission
 
   FORCE_JOIN: {
-    ENABLED: false, // true = Force Join Channel, false = No Force Join
+    ENABLED: true, // true = Force Join Channel, false = No Force Join
     CHANNEL_ID: "-1003109042473",
     CHANNEL_LINK: "https://t.me/jaiwateam",
   },
