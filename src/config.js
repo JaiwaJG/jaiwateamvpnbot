@@ -18,7 +18,7 @@ export const CONFIG = {
     MIN_TOPUP: 2500,
   },
 
-  // 💎 Packages Configuration (Category ၂ မျိုး ခွဲခြားထားခြင်း)
+  // 💎 Packages Configuration
   PACKAGES: {
     // --- Category 1: Limited Data | Unlimited Users ---
     "50gb": {

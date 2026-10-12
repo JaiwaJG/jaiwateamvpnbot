@@ -12,58 +12,64 @@ export function getMainKeyboard() {
       ],
       [makeBtn("Refer & Earn", "callback_data", "menu_referral", null, "STAR")],
       [
-        makeBtn("Contact Support", "url", `https://t.me/${CONFIG.ADMIN_USERNAME}`, null, "BTN_SUPPORT"),
+        makeBtn("Contact Support", "url", `https://t.me/nevera33`, null, "BTN_SUPPORT"),
         makeBtn("Terms of Service", "callback_data", "menu_terms", null, "BTN_TERMS")
       ]
     ]
   };
 }
 
-// ၁။ Category ရွေးချယ်သည့် Keyboard (Buy ကို နှိပ်သည့်အခါ ပြသမည့် ခလုတ် ၃ ခု)
+// 1. Category Selection Keyboard
 export function getCategoryKeyboard() {
   return {
     inline_keyboard: [
-      [makeBtn("Limit data | unlimited user", "callback_data", "cat_limited_data", "primary", "STOCK")],
-      [makeBtn("Unlimited Data | limited user", "callback_data", "cat_unlimited_data", "primary", "FLASH")],
+      [makeBtn("Limited Data | Unlimited Users", "callback_data", "cat_limited_data", "primary", "STOCK")],
+      [makeBtn("Unlimited Data | Limited Users", "callback_data", "cat_unlimited_data", "primary", "FLASH")],
       [makeBtn("Home", "callback_data", "menu_home", null, "BTN_HOME")]
     ]
   };
 }
 
-// ၂။ သက်ဆိုင်ရာ Category အလိုက် Packages ရွေးချယ်သည့် Keyboard
-export function getCategoryPackagesKeyboard(categoryType) {
+// 2. Category Packages Keyboard with Dynamic Stock Check (Out of Stock => Red Style + ❌)
+export function getCategoryPackagesKeyboard(categoryType, stockMap = {}) {
   const rows = [];
-  if (categoryType === "limited_data") {
-    rows.push([makeBtn("Buy 50 GB — 2,500 MMK", "callback_data", "detail_pkg_50gb", "primary", "BTN_SHOP")]);
-    rows.push([makeBtn("Buy 100 GB — 4,500 MMK", "callback_data", "detail_pkg_100gb", "primary", "BTN_SHOP")]);
-    rows.push([makeBtn("Buy 250 GB — 10,500 MMK", "callback_data", "detail_pkg_250gb", "primary", "BTN_SHOP")]);
-  } else {
-    rows.push([makeBtn("1 Month | 1 User — 6,000 MMK", "callback_data", "detail_pkg_1m_1u", "primary", "BTN_SHOP")]);
-    rows.push([makeBtn("1 Month | 2 Users — 10,000 MMK", "callback_data", "detail_pkg_1m_2u", "primary", "BTN_SHOP")]);
-    rows.push([makeBtn("3 Months | 1 User — 16,000 MMK", "callback_data", "detail_pkg_3m_1u", "primary", "BTN_SHOP")]);
-    rows.push([makeBtn("3 Months | 2 Users — 27,000 MMK", "callback_data", "detail_pkg_3m_2u", "primary", "BTN_SHOP")]);
+  const pkgs = Object.entries(CONFIG.PACKAGES).filter(([k, v]) => v.category_type === categoryType);
+
+  for (const [key, pkg] of pkgs) {
+    const stockCount = stockMap[key] || 0;
+    if (stockCount > 0) {
+      rows.push([
+        makeBtn(`${pkg.name} — ${pkg.price.toLocaleString()} MMK`, "callback_data", `detail_pkg_${key}`, "primary", "BTN_SHOP")
+      ]);
+    } else {
+      // Stock Out State
+      rows.push([
+        makeBtn(`${pkg.name} — Out of Stock`, "callback_data", `out_of_stock_${key}`, "danger", "FALSE")
+      ]);
+    }
   }
+
   rows.push([makeBtn("Back to Categories", "callback_data", "menu_buy", null, "BTN_BACK")]);
   return { inline_keyboard: rows };
 }
 
-// ၃။ Plan Detail စာမျက်နှာတွင် ပြသမည့် Payment Method ခလုတ်များ
+// 3. Plan Detail Payment Method Selection
 export function getPlanPaymentMethodKeyboard(categoryKey, categoryType) {
   return {
     inline_keyboard: [
-      [makeBtn("Buy with wallet", "callback_data", `buy_wallet_${categoryKey}`, "success", "WALLET")],
-      [makeBtn("Pay Direct", "callback_data", `pay_direct_${categoryKey}`, "primary", "KPAY")],
+      [makeBtn("Buy with Wallet", "callback_data", `buy_wallet_${categoryKey}`, "success", "WALLET")],
+      [makeBtn("Pay Direct (Manual Slip)", "callback_data", `pay_direct_${categoryKey}`, "primary", "KPAY")],
       [makeBtn("Back to Plans", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
     ]
   };
 }
 
-// ၄။ Balance မလုံလောက်သည့်အခါ ပြသမည့် Keyboard (Deposit wallet နှင့် Back)
+// 4. Insufficient Balance Keyboard
 export function getInsufficientBalanceKeyboard(categoryType) {
   return {
     inline_keyboard: [
-      [makeBtn("Deposit wallet", "callback_data", "menu_topup", "primary", "BTN_DEPOSIT")],
-      [makeBtn("Back", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
+      [makeBtn("Deposit Wallet", "callback_data", "menu_topup", "primary", "BTN_DEPOSIT")],
+      [makeBtn("Back to Plans", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
     ]
   };
 }
@@ -149,7 +155,7 @@ export function getPaymentAdminKeyboard(requestId, targetUserId, amount) {
       [makeBtn(`Approve (+${amount.toLocaleString()} MMK)`, "callback_data", `pay_app_${requestId}_${targetUserId}_${amount}`, "primary", "BTN_APPROVE")],
       [
         makeBtn("Reject Slip", "callback_data", `pay_rej_${requestId}_${targetUserId}`, "danger", "BTN_REJECT"),
-        makeBtn("Ban Fraud User", "callback_data", `pay_ban_${targetUserId}`, "danger")
+        makeBtn("Ban Fraud User", "callback_data", `pay_ban_${targetUserId}`, "danger", "BAN")
       ]
     ]
   };

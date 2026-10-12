@@ -26,7 +26,7 @@ export default {
     try {
       const now = new Date();
 
-      // --- ၁။ သက်တမ်းကုန်သွားသော TEST KEY များအတွက် Alarm ပို့ခြင်း ---
+      // 1. Expired Free Test Keys Notification
       const expiredTests = await env.DB.prepare(`
         SELECT orders.*, users.first_name 
         FROM orders 
@@ -58,14 +58,13 @@ export default {
         }
       }
 
-      // ၃၀ ရက် ပြည့်သွားသော Test Key မှတ်တမ်းများကို Database မှ ရှင်းထုတ်ခြင်း
       await env.DB.prepare(`
         DELETE FROM orders 
         WHERE category = 'test' 
         AND datetime(created_at, '+30 days') <= datetime('now')
       `).run();
 
-      // --- ၂။ Regular Keys များ သက်တမ်းမကုန်မီ ၂ ရက်အလို Expiry Alarm ပို့ခြင်း ---
+      // 2. Regular Keys 2 Days Expiry Alarm
       const { results } = await env.DB.prepare(`
         SELECT orders.*, users.first_name 
         FROM orders 
@@ -144,17 +143,29 @@ function parseDbDate(dateStr) {
   return new Date(s.includes("T") ? s : s.replace(" ", "T") + (s.endsWith("Z") ? "" : "Z"));
 }
 
+// Multi-admin Verification Helper
 async function checkIsAdmin(env, chatId, user) {
-  if (user?.username && CONFIG.ADMIN_USERNAME && user.username.toLowerCase().replace("@", "") === CONFIG.ADMIN_USERNAME.toLowerCase().replace("@", "")) {
-    return true;
+  if (user?.username && Array.isArray(CONFIG.ADMIN_USERNAME)) {
+    const cur = user.username.toLowerCase().replace("@", "");
+    if (CONFIG.ADMIN_USERNAME.some(a => a.toLowerCase().replace("@", "") === cur)) {
+      return true;
+    }
+  } else if (user?.username && typeof CONFIG.ADMIN_USERNAME === "string") {
+    if (user.username.toLowerCase().replace("@", "") === CONFIG.ADMIN_USERNAME.toLowerCase().replace("@", "")) {
+      return true;
+    }
   }
-  const memberData = await tgJson(env, "getChatMember", {
-    chat_id: chatId,
-    user_id: user.id
-  });
-  return memberData?.ok && ["creator", "administrator"].includes(memberData?.result?.status);
-}
 
+  try {
+    const memberData = await tgJson(env, "getChatMember", {
+      chat_id: chatId,
+      user_id: user.id
+    });
+    return memberData?.ok && ["creator", "administrator"].includes(memberData?.result?.status);
+  } catch (e) {
+    return false;
+  }
+}
 
 async function checkMustJoin(env, userId) {
   if (!CONFIG.FORCE_JOIN?.ENABLED) return true;
@@ -167,9 +178,26 @@ async function checkMustJoin(env, userId) {
     const status = res.result.status;
     return ["member", "administrator", "creator"].includes(status);
   } catch (err) {
-    console.error("Force join error:", err);
     return true;
   }
+}
+
+async function getStockCountMap(env) {
+  const stockMap = {};
+  for (const k of Object.keys(CONFIG.PACKAGES)) {
+    stockMap[k] = 0;
+  }
+  stockMap["test"] = 0;
+
+  try {
+    const rows = await env.DB.prepare("SELECT category, COUNT(*) as count FROM keys GROUP BY category").all();
+    if (rows && rows.results) {
+      for (const r of rows.results) {
+        stockMap[r.category] = Number(r.count || 0);
+      }
+    }
+  } catch (e) {}
+  return stockMap;
 }
 
 async function getOrCreateUser(env, from, referrerId = null) {
@@ -189,6 +217,7 @@ async function handleMessage(msg, env) {
   const paymentGroupId = String(env.PAYMENT_GROUP_ID || "").trim();
   const stockGroupId = String(env.STOCK_GROUP_ID || "").trim();
 
+  // Group commands deletion
   if (msg.chat.type !== "private" && msg.text && msg.text.startsWith("/")) {
     try {
       await tg(env, "deleteMessage", { chat_id: msg.chat.id, message_id: msg.message_id });
@@ -209,7 +238,7 @@ async function handleMessage(msg, env) {
     if (user.is_banned === 1) {
       await tg(env, "sendMessage", {
         chat_id: chatId,
-        text: `${e("BAN", "🚫")} <b>Access Denied:</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n Your account has been permanently suspended due to violation of store rules.`,
+        text: `${e("BAN", "🚫")} <b>Access Denied:</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\nYour account has been permanently suspended due to violation of store rules.`,
         parse_mode: "HTML",
       });
       return;
@@ -288,7 +317,7 @@ async function handleMessage(msg, env) {
       if (currentAmt <= 0) {
         await tg(env, "sendMessage", {
           chat_id: chatId,
-          text: `${e("WARNING", "⚠️")} Please select a deposit amount from ${e("DEPOSIT", "💳")}<b>Deposit</b> menu before uploading payment screenshot.`,
+          text: `${e("WARNING", "⚠️")} Please select a deposit amount or plan from the menu before uploading payment screenshot.`,
           parse_mode: "HTML",
           reply_markup: KB.getMainKeyboard(),
         });
@@ -297,7 +326,7 @@ async function handleMessage(msg, env) {
 
       const photo = msg.photo[msg.photo.length - 1];
       const res = await env.DB.prepare(
-        "INSERT INTO topup_requests (user_id, amount, slip_file_id) VALUES (?, ?, ?)"
+        "INSERT INTO topup_requests (user_id, amount, slip_file_id, status) VALUES (?, ?, ?, 'pending')"
       ).bind(user.telegram_id, currentAmt, photo.file_id).run();
 
       const requestId = res.meta?.last_row_id || Date.now();
@@ -305,7 +334,7 @@ async function handleMessage(msg, env) {
 
       await tg(env, "sendMessage", {
         chat_id: chatId,
-        text: `${e("DONE", "✅")} <b>Payment Slip Received!</b>\n\nAmount: <b>${currentAmt.toLocaleString()} MMK</b>\nOur team is verifying your payment. ${e("CLOCK", "⏳")} \nYour wallet balance will be credited within <b>5 Minutes to 24 Hours maximum</b> automatically once approved.\n\nHave A Great Day ${e("STAR", "✨")}`,
+        text: `${e("DONE", "✅")} <b>Payment Slip Received!</b>\n\nAmount: <b>${currentAmt.toLocaleString()} MMK</b>\nOur team is verifying your payment. ${e("CLOCK", "⏳")}\nYour wallet balance will be credited within <b>5 Minutes to 24 Hours maximum</b> once approved.\n\nHave A Great Day ${e("STAR", "✨")}`,
         parse_mode: "HTML",
       });
 
@@ -344,7 +373,7 @@ async function handleMessage(msg, env) {
         try {
           await tg(env, "sendMessage", {
             chat_id: targetId,
-            text: `${e("BAN", "🚫")} <b>Account Suspended</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account has been suspended for violating our terms of service.`,
+            text: `${e("BAN", "🚫")} <b>Account Suspended</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account has been suspended for violating store rules.`,
             parse_mode: "HTML"
           });
         } catch (_) {}
@@ -360,7 +389,7 @@ async function handleMessage(msg, env) {
         try {
           await tg(env, "sendMessage", {
             chat_id: targetId,
-            text: `${e("SUCCESS", "🎉")} <b>Account Re-activated</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account suspension has been lifted. You can now use the bot again.`,
+            text: `${e("SUCCESS", "🎉")} <b>Account Re-activated</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account suspension has been lifted. You can now use the store.`,
             parse_mode: "HTML"
           });
         } catch (_) {}
@@ -375,9 +404,7 @@ async function handleMessage(msg, env) {
         chat_id: chatId,
         text: reportText,
         parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[makeBtn("Refresh Status", "callback_data", "admin_refresh_stats", "primary", "BTN_REFRESH")]]
-        }
+        reply_markup: KB.getStatsRefreshKeyboard()
       });
       return;
     }
@@ -439,7 +466,7 @@ async function handleMessage(msg, env) {
           successCount++;
         } catch (e) {}
       }
-      await tg(env, "sendMessage", { chat_id: chatId, text: `${e("DONE", "✅")} Sent to <b>${successCount}</b> users.`, parse_mode: "HTML" });
+      await tg(env, "sendMessage", { chat_id: chatId, text: `${e("DONE", "✅")} Announcement sent to <b>${successCount}</b> users.`, parse_mode: "HTML" });
       return;
     }
   }
@@ -447,32 +474,51 @@ async function handleMessage(msg, env) {
   // --- 3. STOCK MANAGEMENT GROUP COMMANDS ---
   if (stockGroupId && isMatchChatId(chatId, stockGroupId)) {
     const cleanCmd = text.split("@")[0].split(/\s+/)[0].toLowerCase();
+    
     if (cleanCmd === "/stock") {
-      const counts = await env.DB.prepare("SELECT category, COUNT(*) as count FROM keys GROUP BY category").all();
+      const stockMap = await getStockCountMap(env);
       let stockMsg = `${e("STATUS", "📊")} <b>Real-Time Key Stock Status</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n`;
-      const stockMap = {};
-      if (counts.results) counts.results.forEach(r => { stockMap[r.category] = r.count; });
 
       for (const [k, pkg] of Object.entries(CONFIG.PACKAGES)) {
-        stockMsg += `• ${e("DOT", "🔹")} ${pkg.name}: <b>${stockMap[k] || 0}</b> items\n`;
+        const count = stockMap[k] || 0;
+        const alertBadge = count <= 2 ? " ⚠️" : "";
+        stockMsg += `• ${e("DOT", "🔹")} ${pkg.name}: <b>${count}</b> keys${alertBadge}\n`;
       }
-      stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> items\n`;
+      stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> keys\n`;
 
       await tg(env, "sendMessage", { chat_id: chatId, text: stockMsg, parse_mode: "HTML", reply_markup: KB.getStockRefreshKeyboard() });
       return;
     }
 
-    if (cleanCmd.startsWith("/add_")) {
+    // Dynamic stock adding for all plans
+    const validCommands = [
+      "/add_test", "/add_50gb", "/add_100gb", "/add_250gb",
+      "/add_1m_1u", "/add_1m_2u", "/add_3m_1u", "/add_3m_2u"
+    ];
+
+    if (validCommands.includes(cleanCmd)) {
       const category = cleanCmd.replace("/add_", "");
       const validKeys = text.split("\n").slice(1).map(k => k.trim()).filter(k => k.startsWith("ss://"));
+      
       if (validKeys.length === 0) {
-        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} No keys detected. Format:\n<code>${cleanCmd}</code>\nss://key1...`, parse_mode: "HTML" });
+        await tg(env, "sendMessage", {
+          chat_id: chatId,
+          text: `${e("WARNING", "⚠️")} No keys detected. Format:\n<code>${cleanCmd}</code>\nss://key1...\nss://key2...`,
+          parse_mode: "HTML"
+        });
         return;
       }
+
       const stmts = validKeys.map(k => env.DB.prepare("INSERT OR IGNORE INTO keys (category, access_key) VALUES (?, ?)").bind(category, k));
       await env.DB.batch(stmts);
       const currentStock = await env.DB.prepare("SELECT COUNT(*) as count FROM keys WHERE category = ?").bind(category).first();
-      await tg(env, "sendMessage", { chat_id: chatId, text: `${e("DONE", "✅")} <b>Keys Added: [${category.toUpperCase()}]</b>\n• Added: <b>${validKeys.length}</b> keys\n• Stock: <b>${currentStock?.count || validKeys.length}</b> keys`, parse_mode: "HTML", reply_markup: KB.getStockRefreshKeyboard() });
+
+      await tg(env, "sendMessage", {
+        chat_id: chatId,
+        text: `${e("DONE", "✅")} <b>Keys Added: [${category.toUpperCase()}]</b>\n\n• Added: <b>${validKeys.length}</b> keys\n• Total in Stock: <b>${currentStock?.count || validKeys.length}</b> keys`,
+        parse_mode: "HTML",
+        reply_markup: KB.getStockRefreshKeyboard()
+      });
       return;
     }
   }
@@ -480,15 +526,24 @@ async function handleMessage(msg, env) {
 
 async function getStoreAnalyticsReport(env) {
   const fmtNum = (n) => Number(n || 0).toLocaleString();
+  const nowStr = new Date().toLocaleString("en-US", {
+    day: "numeric", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+    timeZone: "Asia/Yangon"
+  });
+
   const totalRevRes = await env.DB.prepare("SELECT SUM(price) as total_rev, COUNT(*) as total_orders FROM orders WHERE category != 'test'").first();
   const todayRes = await env.DB.prepare("SELECT SUM(price) as today_rev, COUNT(*) as today_orders FROM orders WHERE category != 'test' AND date(datetime(created_at, '+6 hours', '+30 minutes')) = date(datetime('now', '+6 hours', '+30 minutes'))").first();
   const totalUsersRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users").first();
+  const pendingAuditRes = await env.DB.prepare("SELECT COUNT(*) as count FROM topup_requests WHERE status = 'pending'").first();
 
-  return `${e("STATUS", "📊")} <b>Store Analytics Report</b>\n` +
+  return `${e("STATUS", "📊")} <b>Store Analytics & Revenue Report</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `• <b>Today Sales:</b> ${fmtNum(todayRes?.today_rev)} MMK (${fmtNum(todayRes?.today_orders)} Orders)\n` +
-    `• <b>All-Time Revenue:</b> ${fmtNum(totalRevRes?.total_rev)} MMK (${fmtNum(totalRevRes?.total_orders)} Orders)\n` +
-    `• <b>Total Users:</b> ${fmtNum(totalUsersRes?.count)}`;
+    `• <b>All-Time Revenue:</b> ${fmtNum(totalRevRes?.total_rev)} MMK (${fmtNum(totalRevRes?.total_orders)} Completed Orders)\n` +
+    `• <b>Total Registered Users:</b> ${fmtNum(totalUsersRes?.count)}\n` +
+    `• <b>Pending Audit Queue:</b> ${fmtNum(pendingAuditRes?.count)} Slips\n\n` +
+    `<i>Last updated: ${nowStr}</i>`;
 }
 
 // Callback Processor
@@ -501,8 +556,6 @@ async function handleCallback(cb, env) {
   const paymentGroupId = String(env.PAYMENT_GROUP_ID || "").trim();
   const stockGroupId = String(env.STOCK_GROUP_ID || "").trim();
 
-  await tg(env, "answerCallbackQuery", { callback_query_id: callbackId });
-
   async function editMsg(text, replyMarkup) {
     await tg(env, "editMessageText", {
       chat_id: chatId,
@@ -513,84 +566,157 @@ async function handleCallback(cb, env) {
     });
   }
 
-  // --- REFERRAL PROGRAM ---
-  if (data === "menu_referral") {
-    const countRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users WHERE referred_by = ?").bind(userId).first();
-    const userRes = await env.DB.prepare("SELECT referral_earnings FROM users WHERE telegram_id = ?").bind(userId).first();
-    await editMsg(MSG.getReferralMessage(CONFIG.BOT_USERNAME, userId, countRes?.count || 0, userRes?.referral_earnings || 0, CONFIG.REFERRAL_PERCENT), KB.getReferralKeyboard());
+  // --- Out of stock prompt ---
+  if (data.startsWith("out_of_stock_")) {
+    await tg(env, "answerCallbackQuery", {
+      callback_query_id: callbackId,
+      text: "❌ This package is currently out of stock! Admin has been notified to restock.",
+      show_alert: true
+    });
     return;
   }
 
-  // --- FORCE JOIN CHECK ---
-  if (data === "check_force_join") {
-    const isJoined = await checkMustJoin(env, userId);
-    if (!isJoined) {
-      await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "❌ Please join the channel first!", show_alert: true });
+  // --- Payment Audit Actions in Payment Group (Robust Handling) ---
+  if (paymentGroupId && isMatchChatId(chatId, paymentGroupId)) {
+    const isAdmin = await checkIsAdmin(env, chatId, cb.from);
+    if (!isAdmin) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "⚠️ Only store administrators can perform this action!", show_alert: true });
       return;
     }
-    await editMsg(MSG.getWelcomeMessage(cb.from.first_name), KB.getMainKeyboard());
-    return;
-  }
 
-  // --- ADMIN GROUP ACTIONS ---
-  if (stockGroupId && isMatchChatId(chatId, stockGroupId) && data === "admin_refresh_stock") {
-    const counts = await env.DB.prepare("SELECT category, COUNT(*) as count FROM keys GROUP BY category").all();
-    let stockMsg = `${e("STATUS", "📊")} <b>Real-Time Key Stock Status</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n`;
-    const stockMap = {};
-    if (counts.results) counts.results.forEach(r => { stockMap[r.category] = r.count; });
-    for (const [k, pkg] of Object.entries(CONFIG.PACKAGES)) {
-      stockMsg += `• ${e("DOT", "🔹")} ${pkg.name}: <b>${stockMap[k] || 0}</b> items\n`;
-    }
-    stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> items\n`;
-    await editMsg(stockMsg, KB.getStockRefreshKeyboard());
-    return;
-  }
-
-  if (paymentGroupId && isMatchChatId(chatId, paymentGroupId) && data === "admin_refresh_stats") {
-    const reportText = await getStoreAnalyticsReport(env);
-    await editMsg(reportText, KB.getStatsRefreshKeyboard());
-    return;
-  }
-
-  // Payment Audit Actions
-  if (paymentGroupId && isMatchChatId(chatId, paymentGroupId)) {
+    // 1. APPROVE SLIP
     if (data.startsWith("pay_app_")) {
-      const [, , reqId, targetUserId, amountStr] = data.split("_");
-      const amount = Number(amountStr);
+      const parts = data.split("_");
+      const reqId = parts[2];
+      const targetUserId = parts[3];
+      const amount = Number(parts[4]);
 
-      await env.DB.batch([
-        env.DB.prepare("UPDATE users SET balance = balance + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId),
-        env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId)
-      ]);
+      try {
+        await env.DB.batch([
+          env.DB.prepare("UPDATE users SET balance = balance + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId),
+          env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId)
+        ]);
 
-      await tg(env, "editMessageCaption", { chat_id: chatId, message_id: messageId, caption: (cb.message.caption || "") + `\n\n🟢 <b>APPROVED (+${amount.toLocaleString()} MMK)</b>`, parse_mode: "HTML" });
-      await tg(env, "sendMessage", { chat_id: targetUserId, text: `${e("SUCCESS", "🎉")} <b>Deposit Approved!</b>\n\nYour wallet credited with <b>+${amount.toLocaleString()} MMK</b>.`, parse_mode: "HTML", reply_markup: KB.getMainKeyboard() });
-      
-      const targetUser = await env.DB.prepare("SELECT referred_by FROM users WHERE telegram_id = ?").bind(targetUserId).first();
-      if (targetUser && targetUser.referred_by) {
-        const bonusAmount = Math.floor(amount * ((CONFIG.REFERRAL_PERCENT || 5) / 100));
-        if (bonusAmount > 0) {
-          await env.DB.prepare(`UPDATE users SET balance = balance + ?, referral_earnings = referral_earnings + ? WHERE telegram_id = ?`).bind(bonusAmount, bonusAmount, targetUser.referred_by).run();
+        await tg(env, "editMessageCaption", {
+          chat_id: chatId,
+          message_id: messageId,
+          caption: (cb.message?.caption || "") + `\n\n🟢 <b>APPROVED (+${amount.toLocaleString()} MMK) by @${cb.from.username || "Admin"}</b>`,
+          parse_mode: "HTML"
+        });
+
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `✅ Approved (+${amount.toLocaleString()} MMK)!` });
+
+        await tg(env, "sendMessage", {
+          chat_id: targetUserId,
+          text: `${e("SUCCESS", "🎉")} <b>Deposit Approved!</b>\n\nYour wallet has been credited with <b>+${amount.toLocaleString()} MMK</b>.\nYou can now purchase Outline VPN keys anytime! ${e("STAR", "✨")}`,
+          parse_mode: "HTML",
+          reply_markup: KB.getMainKeyboard()
+        });
+
+        // Referral commission check
+        const targetUser = await env.DB.prepare("SELECT referred_by FROM users WHERE telegram_id = ?").bind(targetUserId).first();
+        if (targetUser && targetUser.referred_by) {
+          const bonusAmount = Math.floor(amount * ((CONFIG.REFERRAL_PERCENT || 5) / 100));
+          if (bonusAmount > 0) {
+            await env.DB.prepare("UPDATE users SET balance = balance + ?, referral_earnings = referral_earnings + ? WHERE telegram_id = ?").bind(bonusAmount, bonusAmount, targetUser.referred_by).run();
+            try {
+              await tg(env, "sendMessage", {
+                chat_id: targetUser.referred_by,
+                text: `${e("SUCCESS", "🎉")} <b>Referral Bonus Received!</b>\n\nYour invited friend topped up their wallet.\nYou earned: <b>+${bonusAmount.toLocaleString()} MMK</b> credited to your wallet!`,
+                parse_mode: "HTML"
+              });
+            } catch (_) {}
+          }
         }
+      } catch (err) {
+        console.error("Approve DB Error:", err);
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `❌ DB Error: ${err.message}`, show_alert: true });
       }
       return;
     }
 
+    // 2. REJECT SLIP
     if (data.startsWith("pay_rej_")) {
-      const [, , reqId, targetUserId] = data.split("_");
-      await env.DB.prepare("UPDATE topup_requests SET status = 'rejected' WHERE id = ?").bind(reqId).run();
-      await tg(env, "editMessageCaption", { chat_id: chatId, message_id: messageId, caption: (cb.message.caption || "") + `\n\n🔴 <b>REJECTED</b>`, parse_mode: "HTML" });
-      await tg(env, "sendMessage", { chat_id: targetUserId, text: `${e("FALSE", "❌")} Deposit verification rejected.`, parse_mode: "HTML", reply_markup: KB.getMainKeyboard() });
+      const parts = data.split("_");
+      const reqId = parts[2];
+      const targetUserId = parts[3];
+
+      try {
+        await env.DB.prepare("UPDATE topup_requests SET status = 'rejected' WHERE id = ?").bind(reqId).run();
+
+        await tg(env, "editMessageCaption", {
+          chat_id: chatId,
+          message_id: messageId,
+          caption: (cb.message?.caption || "") + `\n\n🔴 <b>REJECTED by @${cb.from.username || "Admin"}</b>`,
+          parse_mode: "HTML"
+        });
+
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "🔴 Slip Rejected!" });
+
+        await tg(env, "sendMessage", {
+          chat_id: targetUserId,
+          text: `${e("FALSE", "❌")} <b>Deposit Verification Failed:</b> We could not verify your transaction slip. Please check your transfer details or contact support.`,
+          parse_mode: "HTML",
+          reply_markup: KB.getMainKeyboard()
+        });
+      } catch (err) {
+        console.error("Reject Error:", err);
+      }
       return;
     }
 
+    // 3. BAN FRAUD USER
     if (data.startsWith("pay_ban_")) {
       const targetUserId = data.replace("pay_ban_", "");
-      await env.DB.prepare("UPDATE users SET is_banned = 1 WHERE telegram_id = ?").bind(targetUserId).run();
-      await tg(env, "editMessageCaption", { chat_id: chatId, message_id: messageId, caption: (cb.message.caption || "") + `\n\n🚫 <b>USER BANNED</b>`, parse_mode: "HTML" });
+
+      try {
+        await env.DB.prepare("UPDATE users SET is_banned = 1 WHERE telegram_id = ?").bind(targetUserId).run();
+
+        await tg(env, "editMessageCaption", {
+          chat_id: chatId,
+          message_id: messageId,
+          caption: (cb.message?.caption || "") + `\n\n🚫 <b>USER BANNED by @${cb.from.username || "Admin"}</b>`,
+          parse_mode: "HTML"
+        });
+
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "🚫 User Banned Permanently!" });
+
+        await tg(env, "sendMessage", {
+          chat_id: targetUserId,
+          text: `${e("BAN", "🚫")} <b>Account Suspended:</b> Your account has been permanently banned due to fraudulent slip submission.`,
+          parse_mode: "HTML"
+        });
+      } catch (err) {
+        console.error("Ban Error:", err);
+      }
+      return;
+    }
+
+    if (data === "admin_refresh_stats") {
+      const reportText = await getStoreAnalyticsReport(env);
+      await editMsg(reportText, KB.getStatsRefreshKeyboard());
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Stats Refreshed!" });
       return;
     }
   }
+
+  // --- Stock Group Refresh Action ---
+  if (stockGroupId && isMatchChatId(chatId, stockGroupId) && data === "admin_refresh_stock") {
+    const stockMap = await getStockCountMap(env);
+    let stockMsg = `${e("STATUS", "📊")} <b>Real-Time Key Stock Status</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n`;
+
+    for (const [k, pkg] of Object.entries(CONFIG.PACKAGES)) {
+      stockMsg += `• ${e("DOT", "🔹")} ${pkg.name}: <b>${stockMap[k] || 0}</b> keys\n`;
+    }
+    stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> keys\n`;
+
+    await editMsg(stockMsg, KB.getStockRefreshKeyboard());
+    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Stock Refreshed!" });
+    return;
+  }
+
+  // Always Answer Callback to eliminate loading animation
+  await tg(env, "answerCallbackQuery", { callback_query_id: callbackId });
 
   // --- USER INTERACTION FLOW ---
   const user = await getOrCreateUser(env, cb.from);
@@ -600,6 +726,25 @@ async function handleCallback(cb, env) {
   // Return Home
   if (data === "menu_home") {
     await env.DB.prepare("UPDATE users SET pending_topup_amount = 0 WHERE telegram_id = ?").bind(user.telegram_id).run();
+    await editMsg(MSG.getWelcomeMessage(cb.from.first_name), KB.getMainKeyboard());
+    return;
+  }
+
+  // Referral
+  if (data === "menu_referral") {
+    const countRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users WHERE referred_by = ?").bind(userId).first();
+    const userRes = await env.DB.prepare("SELECT referral_earnings FROM users WHERE telegram_id = ?").bind(userId).first();
+    await editMsg(MSG.getReferralMessage(CONFIG.BOT_USERNAME, userId, countRes?.count || 0, userRes?.referral_earnings || 0, CONFIG.REFERRAL_PERCENT), KB.getReferralKeyboard());
+    return;
+  }
+
+  // Force Join
+  if (data === "check_force_join") {
+    const isJoined = await checkMustJoin(env, userId);
+    if (!isJoined) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "❌ Please join our channel first!", show_alert: true });
+      return;
+    }
     await editMsg(MSG.getWelcomeMessage(cb.from.first_name), KB.getMainKeyboard());
     return;
   }
@@ -627,7 +772,7 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Orders Pagination & Details
+  // Orders Pagination
   if (data.startsWith("menu_orders_p_")) {
     const page = parseInt(data.replace("menu_orders_p_", ""), 10) || 1;
     const pageSize = 10;
@@ -677,9 +822,9 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Terms & Deposit
+  // Terms & Topup
   if (data === "menu_terms") {
-    await editMsg(`${e("TERMS", "📜")} <b>Terms of Service</b>\n\nAll purchases are non-refundable.`, { inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]] });
+    await editMsg(`${e("TERMS", "📜")} <b>Terms of Service & Usage Policies</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n• All wallet top-ups and key sales are non-refundable.\n• Leaving transfer notes with words like "VPN", "Outline" is strictly prohibited.\n• Fraudulent transaction slips will result in an immediate permanent ban.`, { inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]] });
     return;
   }
 
@@ -701,34 +846,39 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // --- 🛒 NEW BUY FLOW: CATEGORY SELECTION ---
-  // Step 1: Buy Key ကို နှိပ်ပါက Category ၂ ခု ခွဲပြခြင်း
+  // --- CATEGORY & PACKAGE SELECTION WITH DYNAMIC STOCK CHECK ---
   if (data === "menu_buy") {
     await editMsg(MSG.getCategorySelectMessage(), KB.getCategoryKeyboard());
     return;
   }
 
-  // Step 2: Category တစ်ခုချင်းစီအောက်ရှိ Packages များ ပြသခြင်း
   if (data === "cat_limited_data" || data === "cat_unlimited_data") {
     const categoryType = data.replace("cat_", "");
-    await editMsg(MSG.getPackageListMessage(balance, categoryType), KB.getCategoryPackagesKeyboard(categoryType));
+    const stockMap = await getStockCountMap(env);
+
+    await editMsg(
+      MSG.getPackageListMessage(balance, categoryType, stockMap),
+      KB.getCategoryPackagesKeyboard(categoryType, stockMap)
+    );
     return;
   }
 
-  // Step 3: Plan တစ်ခုချင်းစီ၏ Detail စာမျက်နှာ (Buy with wallet | Pay Direct ခလုတ်များ)
   if (data.startsWith("detail_pkg_")) {
     const pkgKey = data.replace("detail_pkg_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
     if (!pkg) return;
 
+    const countRow = await env.DB.prepare("SELECT COUNT(*) as count FROM keys WHERE category = ?").bind(pkgKey).first();
+    const inStock = Number(countRow?.count || 0) > 0;
+
     await editMsg(
-      MSG.getPlanDetailMessage(pkgKey, balance),
+      MSG.getPlanDetailMessage(pkgKey, balance, inStock),
       KB.getPlanPaymentMethodKeyboard(pkgKey, pkg.category_type)
     );
     return;
   }
 
-  // Step 4: Pay Direct (ငွေလွှဲ အချက်အလက် တန်းပြပြီး Slip တင်ခိုင်းခြင်း)
+  // Pay Direct
   if (data.startsWith("pay_direct_")) {
     const pkgKey = data.replace("pay_direct_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
@@ -743,13 +893,12 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Step 5: Buy with Wallet (လက်ကျန်ငွေ စစ်ဆေးပြီး Key ထုတ်ပေးခြင်း)
+  // Buy with Wallet
   if (data.startsWith("buy_wallet_")) {
     const pkgKey = data.replace("buy_wallet_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
     if (!pkg) return;
 
-    // လက်ကျန်ငွေ မလုံလောက်ပါက -> Deposit wallet / Back ခလုတ် ပြသခြင်း
     if (balance < pkg.price) {
       await editMsg(
         MSG.getInsufficientBalanceMessage(pkg.price, balance),
@@ -758,7 +907,6 @@ async function handleCallback(cb, env) {
       return;
     }
 
-    // လက်ကျန်ငွေ လုံလောက်ပါက Stock Key ရှာဖွေခြင်း
     const keyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = ? LIMIT 1").bind(pkgKey).first();
 
     if (!keyItem) {
@@ -767,14 +915,13 @@ async function handleCallback(cb, env) {
         {
           inline_keyboard: [
             [makeBtn("Back to Plans", "callback_data", `cat_${pkg.category_type}`, null, "BTN_BACK")],
-            [makeBtn("Contact Support", "url", `https://t.me/${CONFIG.ADMIN_USERNAME}`, null, "BTN_SUPPORT")]
+            [makeBtn("Contact Support", "url", `https://t.me/nevera33`, null, "BTN_SUPPORT")]
           ]
         }
       );
       return;
     }
 
-    // Balance ဖြတ်ခြင်း၊ Key ဖျက်ခြင်းနှင့် Order မှတ်တမ်းတင်ခြင်း
     try {
       await env.DB.prepare("UPDATE users SET balance = balance - ?, total_spent = COALESCE(total_spent, 0) + ?, total_orders = total_orders + 1 WHERE telegram_id = ?").bind(pkg.price, pkg.price, userId).run();
     } catch (_) {
@@ -783,7 +930,6 @@ async function handleCallback(cb, env) {
     await env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(keyItem.id).run();
     await env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, ?, ?, ?)").bind(userId, pkgKey, keyItem.access_key, pkg.price).run();
 
-    // Delivery Message ပြသခြင်း
     await editMsg(MSG.getKeyDeliveryMessage(pkgKey, pkg.price, keyItem.access_key), {
       inline_keyboard: [
         [makeBtn("View in Orders", "callback_data", "menu_orders_p_1", null, "BTN_ORDERS")],
@@ -791,7 +937,6 @@ async function handleCallback(cb, env) {
       ]
     });
 
-    // Sales Channel Alert
     const salesChannelId = String(env.SALES_CHANNEL_ID || "").trim();
     if (salesChannelId) {
       try {
@@ -804,7 +949,6 @@ async function handleCallback(cb, env) {
       } catch (err) {}
     }
 
-    // Stock Alert
     if (stockGroupId) {
       try {
         const countRow = await env.DB.prepare("SELECT COUNT(*) as count FROM keys WHERE category = ?").bind(pkgKey).first();
@@ -828,7 +972,7 @@ async function handleCallback(cb, env) {
       const claimedDate = parseDbDate(existingTest.created_at);
       const nextAvailDate = new Date(claimedDate.getTime() + (30 * 24 * 60 * 60 * 1000));
       if (new Date().getTime() < nextAvailDate.getTime()) {
-        await editMsg(`${e("WARNING", "⚠️")} <b>Test Key Already Claimed!</b>\n\nYou can claim another test key after 30 days.`, {
+        await editMsg(`${e("WARNING", "⚠️")} <b>Test Key Already Claimed!</b>\n\nYou can claim another test key after 30 days cooldown.`, {
           inline_keyboard: [
             [makeBtn("View My Test Key", "callback_data", "view_claimed_test_key", null, "BTN_KEY")],
             [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]

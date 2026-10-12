@@ -37,41 +37,45 @@ export function getWelcomeMessage(firstName) {
     `${e("STAR", "✨")} <b>Referral</b> — Invite friends & earn 5%\n` +
     `${e("TERMS", "📜")} <b>Terms</b> — Store rules & usage policies` +
     `</blockquote>\n\n` +
-    `${e("BUY", "👑")} <b>Sale Proved: @salesproved</b>\n\n` +
+    `${e("BUY", "👑")} <b>Sale Proved: @saleproved</b>\n\n` +
     `<b>Select an option below to continue.</b> ${e("DOWN", "👇")}`
   );
 }
 
-// Category Selection Message
+// Category Selection Message (English)
 export function getCategorySelectMessage() {
   return (
     `${e("SHOP", "🛍")} <b>Select Package Category</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `ကျေးဇူးပြု၍ မိမိအသုံးပြုလိုသော Key အမျိုးအစားကို ရွေးချယ်ပေးပါ:\n\n` +
+    `Please choose your desired key package category:\n\n` +
     `<blockquote>` +
-    `1️⃣ <b>Limit data | unlimited user</b>\n` +
-    `• သတ်မှတ်ထားသော High-Speed Data ဖြစ်ပြီး Device အကန့်အသတ်မရှိ ချိတ်ဆက်နိုင်ပါသည်။\n\n` +
-    `2️⃣ <b>Unlimited Data | limited user</b>\n` +
-    `• Data အကန့်အသတ်မရှိ (Unlimited) ဖြစ်ပြီး သတ်မှတ် User/Device အရေအတွက်သာ သုံးနိုင်ပါသည်။` +
+    `1 <b>Limited Data | Unlimited Users</b>\n` +
+    `• High-speed data quota with unlimited simultaneous device connections.\n\n` +
+    `2 <b>Unlimited Data | Limited Users</b>\n` +
+    `• 100% Unlimited high-speed data with dedicated device quota.` +
     `</blockquote>\n\n` +
-    `${e("DOWN", "👇")} <i>Choose a category below:</i>`
+    `${e("DOWN", "👇")} <i>Choose a category below to continue:</i>`
   );
 }
 
-// Category တစ်ခုချင်းစီအောက်ရှိ Package စာရင်းပြသခြင်း
-export function getPackageListMessage(balance, categoryType) {
+// Category Package List Message (English)
+export function getPackageListMessage(balance, categoryType, stockMap = {}) {
   const isLimited = categoryType === "limited_data";
-  const title = isLimited ? "Limit data | unlimited user" : "Unlimited Data | limited user";
+  const title = isLimited ? "Limited Data | Unlimited Users" : "Unlimited Data | Limited Users";
 
   let listHtml = "";
   for (const [key, pkg] of Object.entries(CONFIG.PACKAGES)) {
     if (pkg.category_type === categoryType) {
+      const stock = stockMap[key] || 0;
+      const stockBadge = stock > 0 ? `${e("ACTIVE", "🟢")} In Stock (${stock})` : `${e("INACTIVE", "🔴")} Out of Stock`;
+
       listHtml += 
         `<blockquote>` +
         `${e("OUTLINE", "🔹")} <b>${pkg.name}</b>\n` +
-        `• Details: ${pkg.detail}\n` +
-        `• Validity: <b>${pkg.days} Days</b>\n` +
-        `• Price: <b>${pkg.price.toLocaleString()} MMK</b>\n` +
+        `• <b>Details:</b> ${pkg.detail}\n` +
+        `• <b>Validity:</b> ${pkg.days} Days\n` +
+        `• <b>Price:</b> <b>${pkg.price.toLocaleString()} MMK</b>\n` +
+        `• <b>Status:</b> ${stockBadge}\n` +
         `</blockquote>\n`;
     }
   }
@@ -81,15 +85,15 @@ export function getPackageListMessage(balance, categoryType) {
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `${e("BALANCE", "💰")} <b>My Balance:</b> <code>${balance.toLocaleString()} MMK</code>\n\n` +
     listHtml + `\n` +
-    `${e("FLASH", "⚡️")} <i>Select a package below to view details and purchase:</i>`
+    `${e("FLASH", "⚡️")} <i>Select a package below to view details and proceed to checkout:</i>`
   );
 }
 
-// Plan Detail Message
-export function getPlanDetailMessage(pkgKey, balance) {
+// Plan Detail Message (English)
+export function getPlanDetailMessage(pkgKey, balance, inStock = true) {
   const pkg = CONFIG.PACKAGES[pkgKey];
   return (
-    `${e("STOCK", "📦")} <b>Plan Detail & Purchase</b>\n` +
+    `${e("STOCK", "📦")} <b>Plan Details & Confirmation</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `<blockquote>` +
     `• <b>Plan:</b> ${pkg.name}\n` +
@@ -97,20 +101,22 @@ export function getPlanDetailMessage(pkgKey, balance) {
     `• <b>Allowed Devices:</b> ${pkg.users}\n` +
     `• <b>Duration:</b> ${pkg.days} Days\n` +
     `• <b>Price:</b> <b>${pkg.price.toLocaleString()} MMK</b>\n` +
-    `• <b>Your Balance:</b> <b>${balance.toLocaleString()} MMK</b>` +
+    `• <b>Your Wallet Balance:</b> <b>${balance.toLocaleString()} MMK</b>\n` +
+    `• <b>Availability:</b> ${inStock ? "🟢 Available" : "🔴 Out of Stock"}` +
     `</blockquote>\n\n` +
-    `${e("DOWN", "👇")} <i>Choose your preferred payment method below:</i>`
+    `${e("DOWN", "👇")} <i>Select your preferred payment method below:</i>`
   );
 }
 
-// Wallet Balance မလုံလောက်သည့် Message
+// Insufficient Wallet Balance Message (English)
 export function getInsufficientBalanceMessage(price, balance) {
   return (
     `${e("UNSTOCK", "😔")} <b>Insufficient Wallet Balance!</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `<blockquote>` +
-    `• Plan Price: <b>${price.toLocaleString()} MMK</b>\n` +
-    `• Your Balance: <b>${balance.toLocaleString()} MMK</b>` +
+    `• <b>Plan Price:</b> <b>${price.toLocaleString()} MMK</b>\n` +
+    `• <b>Your Balance:</b> <b>${balance.toLocaleString()} MMK</b>\n` +
+    `• <b>Required Top-up:</b> <b>${(price - balance).toLocaleString()} MMK</b>` +
     `</blockquote>\n\n` +
     `Please top up your wallet balance to complete this purchase.`
   );
@@ -197,7 +203,6 @@ export function getTestKeyIntroMessage() {
   );
 }
 
-// Expiry Reminder Alarm
 export function getExpiryReminderMessage(buyerName, category, accessKey, daysLeft = 2) {
   const pkg = CONFIG.PACKAGES[category] || { name: category.toUpperCase() };
   return (
@@ -230,21 +235,21 @@ export function getTestKeyExpiredMessage(buyerName) {
 
 export function getReferralMessage(botUsername, tgId, invitedCount, earnings, percent) {
   const refLink = `https://t.me/${botUsername}?start=ref_${tgId}`;
-  return `${e("STAR", "✨")} <b>Referral program</b>\n` +
+  return `${e("STAR", "✨")} <b>Referral Program</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `<blockquote>` +
-    `Share Your Referral Link and earn <b>${percent}%</b> of every deposit your friends make — <i>forever</i>.` +
+    `Share your referral link and earn <b>${percent}%</b> of every deposit your friends make — <i>forever</i>.` +
     `</blockquote>\n\n` +
-    `${e("REFERRAL", "🔗")}<b>My Referral Link:</b>\n` +
+    `${e("REFERRAL", "🔗")} <b>My Referral Link:</b>\n` +
     `<code>${refLink}</code>\n\n` +
     `<blockquote>` +
-    `${e("USERS", "👥")} <b>Invited:</b> ${invitedCount}\n` +
+    `${e("USERS", "👥")} <b>Invited:</b> ${invitedCount} Users\n` +
     `${e("BALANCE", "💰")} <b>Earned:</b> ${Number(earnings || 0).toLocaleString()} MMK` +
     `</blockquote>`;
 }
 
 export function getMustJoinMessage() {
-  return `${e("CROWN", "👑")} <b>Join Our Channel First!</b>\n` +
+  return `${e("CROWN", "👑")} <b>Join Our Official Channel First!</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `Please join our official channel to use this bot.\n\n` +
     `After joining, tap <b>${e("DONE", "✅")} Check / Continue</b> below.`;
@@ -263,18 +268,18 @@ export function getProfileMessage(data) {
     `<blockquote>` +
     `• ${e("BALANCE", "💰")} Available Balance: <b>${balance.toLocaleString()} MMK</b>` +
     `</blockquote>\n\n` +
-    `${e("STATS", "📈")}<b>Account Stats</b>\n` +
+    `${e("STATUS", "📈")} <b>Account Stats</b>\n` +
     `<blockquote>` +
     `• ${e("STOCK", "📦")} Orders Count: <b>${totalOrders}</b>\n` +
     `• ${e("SHOP", "💸")} Total Spent: <b>${totalSpent.toLocaleString()} MMK</b>\n` +
     `• ${e("DEPOSIT", "💳")} Total Deposited: <b>${totalDeposited.toLocaleString()} MMK</b>` +
     `</blockquote>\n\n` +
-    `${e("REFERRAL", "🔗")}<b>Referrals</b>\n` +
+    `${e("REFERRAL", "🔗")} <b>Referrals</b>\n` +
     `<blockquote>` +
     `• ${e("USERS", "👥")} Invited: <b>${invitedCount} Users</b>\n` +
     `• ${e("BALANCE", "💰")} Total Earned: <b>${earnings.toLocaleString()} MMK</b>` +
     `</blockquote>\n\n` +
-    `${e("STOCK", "👥")}<b>Latest Order:</b>\n`;
+    `${e("STOCK", "👥")} <b>Latest Order:</b>\n`;
 
   if (latestOrder) {
     const pkg = CONFIG.PACKAGES[latestOrder.category] || { gb: latestOrder.category.toUpperCase() };
