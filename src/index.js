@@ -143,7 +143,6 @@ function parseDbDate(dateStr) {
   return new Date(s.includes("T") ? s : s.replace(" ", "T") + (s.endsWith("Z") ? "" : "Z"));
 }
 
-// Multi-admin Verification Helper
 async function checkIsAdmin(env, chatId, user) {
   if (user?.username && Array.isArray(CONFIG.ADMIN_USERNAME)) {
     const cur = user.username.toLowerCase().replace("@", "");
@@ -217,7 +216,6 @@ async function handleMessage(msg, env) {
   const paymentGroupId = String(env.PAYMENT_GROUP_ID || "").trim();
   const stockGroupId = String(env.STOCK_GROUP_ID || "").trim();
 
-  // Group commands deletion
   if (msg.chat.type !== "private" && msg.text && msg.text.startsWith("/")) {
     try {
       await tg(env, "deleteMessage", { chat_id: msg.chat.id, message_id: msg.message_id });
@@ -245,7 +243,7 @@ async function handleMessage(msg, env) {
     }
 
     if (text.startsWith("/start")) {
-      await env.DB.prepare("UPDATE users SET pending_topup_amount = 0 WHERE telegram_id = ?").bind(user.telegram_id).run();
+      await env.DB.prepare("UPDATE users SET pending_topup_amount = 0, pending_plan_key = NULL WHERE telegram_id = ?").bind(user.telegram_id).run();
       const isJoined = await checkMustJoin(env, user.telegram_id);
       if (!isJoined) {
         await tg(env, "sendMessage", {
@@ -299,7 +297,7 @@ async function handleMessage(msg, env) {
         return;
       }
 
-      await env.DB.prepare("UPDATE users SET pending_topup_amount = ? WHERE telegram_id = ?").bind(amount, user.telegram_id).run();
+      await env.DB.prepare("UPDATE users SET pending_topup_amount = ?, pending_plan_key = NULL WHERE telegram_id = ?").bind(amount, user.telegram_id).run();
 
       await tg(env, "sendMessage", {
         chat_id: chatId,
@@ -310,14 +308,15 @@ async function handleMessage(msg, env) {
       return;
     }
 
-    // Slip Photo Submission Handler
+    // Slip Photo Submission Handler (Pay Direct & Normal Deposit)
     if (msg.photo && msg.photo.length > 0) {
       const currentAmt = Number(user.pending_topup_amount || 0);
+      const planKey = user.pending_plan_key || null;
 
       if (currentAmt <= 0) {
         await tg(env, "sendMessage", {
           chat_id: chatId,
-          text: `${e("WARNING", "⚠️")} Please select a deposit amount or plan from the menu before uploading payment screenshot.`,
+          text: `${e("WARNING", "⚠️")} Please select a plan or deposit amount from the menu before uploading payment screenshot.`,
           parse_mode: "HTML",
           reply_markup: KB.getMainKeyboard(),
         });
@@ -326,25 +325,27 @@ async function handleMessage(msg, env) {
 
       const photo = msg.photo[msg.photo.length - 1];
       const res = await env.DB.prepare(
-        "INSERT INTO topup_requests (user_id, amount, slip_file_id, status) VALUES (?, ?, ?, 'pending')"
-      ).bind(user.telegram_id, currentAmt, photo.file_id).run();
+        "INSERT INTO topup_requests (user_id, amount, slip_file_id, status, plan_key) VALUES (?, ?, ?, 'pending', ?)"
+      ).bind(user.telegram_id, currentAmt, photo.file_id, planKey).run();
 
       const requestId = res.meta?.last_row_id || Date.now();
-      await env.DB.prepare("UPDATE users SET pending_topup_amount = 0 WHERE telegram_id = ?").bind(user.telegram_id).run();
+      await env.DB.prepare("UPDATE users SET pending_topup_amount = 0, pending_plan_key = NULL WHERE telegram_id = ?").bind(user.telegram_id).run();
 
       await tg(env, "sendMessage", {
         chat_id: chatId,
-        text: `${e("DONE", "✅")} <b>Payment Slip Received!</b>\n\nAmount: <b>${currentAmt.toLocaleString()} MMK</b>\nOur team is verifying your payment. ${e("CLOCK", "⏳")}\nYour wallet balance will be credited within <b>5 Minutes to 24 Hours maximum</b> once approved.\n\nHave A Great Day ${e("STAR", "✨")}`,
+        text: `${e("DONE", "✅")} <b>Payment Slip Received!</b>\n\nAmount: <b>${currentAmt.toLocaleString()} MMK</b>\nOur team is verifying your payment. ${e("CLOCK", "⏳")}\nYour ${planKey ? "VPN key will be delivered" : "wallet balance will be credited"} automatically once approved.\n\nHave A Great Day ${e("STAR", "✨")}`,
         parse_mode: "HTML",
       });
 
       if (paymentGroupId) {
+        const planBadge = planKey ? `\n• <b>Direct Purchase Plan:</b> <code>${CONFIG.PACKAGES[planKey]?.name || planKey}</code>` : "";
         const captionText = 
           `${e("DEPOSIT", "💳")} <b>New Deposit Request (#ID_${requestId})</b>\n` +
           `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
           `• <b>User:</b> ${msg.from.first_name || ""} (<code>${user.telegram_id}</code>)\n` +
           `• <b>Username:</b> @${msg.from.username || "None"}\n` +
-          `• <b>Amount:</b> <b>${currentAmt.toLocaleString()} MMK</b>\n` +
+          `• <b>Amount:</b> <b>${currentAmt.toLocaleString()} MMK</b>` +
+          planBadge + `\n` +
           `• <b>Time:</b> ${MSG.formatMyanmarTime(new Date())}\n\n` +
           `${e("DOWN", "👇")} <i>Verify bank transaction and select action:</i>`;
 
@@ -490,7 +491,6 @@ async function handleMessage(msg, env) {
       return;
     }
 
-    // Dynamic stock adding for all plans
     const validCommands = [
       "/add_test", "/add_50gb", "/add_100gb", "/add_250gb",
       "/add_1m_1u", "/add_1m_2u", "/add_3m_1u", "/add_3m_2u"
@@ -576,7 +576,7 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // --- Payment Audit Actions in Payment Group (Robust Handling) ---
+  // --- PAYMENT GROUP AUDIT ACTIONS ---
   if (paymentGroupId && isMatchChatId(chatId, paymentGroupId)) {
     const isAdmin = await checkIsAdmin(env, chatId, cb.from);
     if (!isAdmin) {
@@ -584,7 +584,7 @@ async function handleCallback(cb, env) {
       return;
     }
 
-    // 1. APPROVE SLIP
+    // 1. APPROVE SLIP (Pay Direct Plan Auto Delivery OR Normal Wallet Deposit)
     if (data.startsWith("pay_app_")) {
       const parts = data.split("_");
       const reqId = parts[2];
@@ -592,26 +592,89 @@ async function handleCallback(cb, env) {
       const amount = Number(parts[4]);
 
       try {
-        await env.DB.batch([
-          env.DB.prepare("UPDATE users SET balance = balance + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId),
-          env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId)
-        ]);
+        // Request မှ plan_key ပါ/မပါ စစ်ဆေးခြင်း
+        const reqRow = await env.DB.prepare("SELECT plan_key FROM topup_requests WHERE id = ?").bind(reqId).first();
+        const planKey = reqRow?.plan_key;
 
-        await tg(env, "editMessageCaption", {
-          chat_id: chatId,
-          message_id: messageId,
-          caption: (cb.message?.caption || "") + `\n\n🟢 <b>APPROVED (+${amount.toLocaleString()} MMK) by @${cb.from.username || "Admin"}</b>`,
-          parse_mode: "HTML"
-        });
+        if (planKey && CONFIG.PACKAGES[planKey]) {
+          // --- CASE A: DIRECT PURCHASE PLAN DELIVER ---
+          const keyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = ? LIMIT 1").bind(planKey).first();
 
-        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `✅ Approved (+${amount.toLocaleString()} MMK)!` });
+          if (!keyItem) {
+            await tg(env, "answerCallbackQuery", {
+              callback_query_id: callbackId,
+              text: `⚠️ Out of Stock for ${planKey.toUpperCase()}! Please restock first before approving.`,
+              show_alert: true
+            });
+            return;
+          }
 
-        await tg(env, "sendMessage", {
-          chat_id: targetUserId,
-          text: `${e("SUCCESS", "🎉")} <b>Deposit Approved!</b>\n\nYour wallet has been credited with <b>+${amount.toLocaleString()} MMK</b>.\nYou can now purchase Outline VPN keys anytime! ${e("STAR", "✨")}`,
-          parse_mode: "HTML",
-          reply_markup: KB.getMainKeyboard()
-        });
+          // Database တွင် key ဖျက်ခြင်း၊ orders ထဲသို့ ထည့်ခြင်းနှင့် status ပြောင်းခြင်း
+          await env.DB.batch([
+            env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(keyItem.id),
+            env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, ?, ?, ?)").bind(targetUserId, planKey, keyItem.access_key, amount),
+            env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId),
+            env.DB.prepare("UPDATE users SET total_orders = total_orders + 1, total_spent = COALESCE(total_spent, 0) + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId)
+          ]);
+
+          await tg(env, "editMessageCaption", {
+            chat_id: chatId,
+            message_id: messageId,
+            caption: (cb.message?.caption || "") + `\n\n🟢 <b>APPROVED & KEY DELIVERED [${planKey.toUpperCase()}] by @${cb.from.username || "Admin"}</b>`,
+            parse_mode: "HTML"
+          });
+
+          await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `✅ Approved & Delivered ${planKey.toUpperCase()} Key!` });
+
+          // User ထံသို့ ပုံထဲကအတိုင်း Purchase Successful နှင့် Key တိုက်ရိုက် ပို့ပေးခြင်း
+          await tg(env, "sendMessage", {
+            chat_id: targetUserId,
+            text: MSG.getKeyDeliveryMessage(planKey, amount, keyItem.access_key),
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [makeBtn("View in Orders", "callback_data", "menu_orders_p_1", null, "BTN_ORDERS")],
+                [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
+              ]
+            }
+          });
+
+          // Sales Channel Alert
+          const salesChannelId = String(env.SALES_CHANNEL_ID || "").trim();
+          if (salesChannelId) {
+            try {
+              const buyer = await env.DB.prepare("SELECT first_name FROM users WHERE telegram_id = ?").bind(targetUserId).first();
+              await tg(env, "sendMessage", {
+                chat_id: salesChannelId,
+                text: MSG.getChannelSaleMessage(buyer?.first_name || "Customer", planKey, amount, keyItem.access_key),
+                parse_mode: "HTML",
+                reply_markup: KB.getSalesChannelKeyboard()
+              });
+            } catch (_) {}
+          }
+        } else {
+          // --- CASE B: NORMAL WALLET TOP-UP ---
+          await env.DB.batch([
+            env.DB.prepare("UPDATE users SET balance = balance + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId),
+            env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId)
+          ]);
+
+          await tg(env, "editMessageCaption", {
+            chat_id: chatId,
+            message_id: messageId,
+            caption: (cb.message?.caption || "") + `\n\n🟢 <b>APPROVED (+${amount.toLocaleString()} MMK) by @${cb.from.username || "Admin"}</b>`,
+            parse_mode: "HTML"
+          });
+
+          await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `✅ Approved (+${amount.toLocaleString()} MMK)!` });
+
+          await tg(env, "sendMessage", {
+            chat_id: targetUserId,
+            text: `${e("SUCCESS", "🎉")} <b>Deposit Approved!</b>\n\nYour wallet has been credited with <b>+${amount.toLocaleString()} MMK</b>.\nYou can now purchase Outline VPN keys anytime! ${e("STAR", "✨")}`,
+            parse_mode: "HTML",
+            reply_markup: KB.getMainKeyboard()
+          });
+        }
 
         // Referral commission check
         const targetUser = await env.DB.prepare("SELECT referred_by FROM users WHERE telegram_id = ?").bind(targetUserId).first();
@@ -622,7 +685,7 @@ async function handleCallback(cb, env) {
             try {
               await tg(env, "sendMessage", {
                 chat_id: targetUser.referred_by,
-                text: `${e("SUCCESS", "🎉")} <b>Referral Bonus Received!</b>\n\nYour invited friend topped up their wallet.\nYou earned: <b>+${bonusAmount.toLocaleString()} MMK</b> credited to your wallet!`,
+                text: `${e("SUCCESS", "🎉")} <b>Referral Bonus Received!</b>\n\nYour invited friend completed a deposit/purchase.\nYou earned: <b>+${bonusAmount.toLocaleString()} MMK</b> credited to your wallet!`,
                 parse_mode: "HTML"
               });
             } catch (_) {}
@@ -715,7 +778,6 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Always Answer Callback to eliminate loading animation
   await tg(env, "answerCallbackQuery", { callback_query_id: callbackId });
 
   // --- USER INTERACTION FLOW ---
@@ -725,7 +787,7 @@ async function handleCallback(cb, env) {
 
   // Return Home
   if (data === "menu_home") {
-    await env.DB.prepare("UPDATE users SET pending_topup_amount = 0 WHERE telegram_id = ?").bind(user.telegram_id).run();
+    await env.DB.prepare("UPDATE users SET pending_topup_amount = 0, pending_plan_key = NULL WHERE telegram_id = ?").bind(user.telegram_id).run();
     await editMsg(MSG.getWelcomeMessage(cb.from.first_name), KB.getMainKeyboard());
     return;
   }
@@ -824,7 +886,49 @@ async function handleCallback(cb, env) {
 
   // Terms & Topup
   if (data === "menu_terms") {
-    await editMsg(`${e("TERMS", "📜")} <b>Terms of Service & Usage Policies</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n• All wallet top-ups and key sales are non-refundable.\n• Leaving transfer notes with words like "VPN", "Outline" is strictly prohibited.\n• Fraudulent transaction slips will result in an immediate permanent ban.`, { inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]] });
+    await editMsg(
+    `${e("TERMS", "📜")} <b>Terms of Service & Store Policies</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `Please review our store policies before depositing funds or purchasing keys:\n\n` +
+
+    `<b>1. Payment & Transfer Rules:</b>\n` +
+    `<blockquote>` +
+    `• Supported Methods: <b>KBZPay, WavePay</b>.\n` +
+    `• <b>Strict Transfer Rule:</b> Keep the payment remark/note <b>COMPLETELY BLANK</b>. Do not write "VPN", "Outline", "Key", or bot names.\n` +
+    `• Submit clear, unedited payment screenshots/slips only.\n` +
+    `• Transactions are manually verified by admins within <b>5 minutes to 24 hours</b>.` +
+    `</blockquote>\n\n` +
+
+    `<b>2. Strict No-Refund Policy:</b>\n` +
+    `<blockquote>` +
+    `• All balance top-ups, direct key purchases, and digital orders are <b>final and non-refundable</b> once processed.` +
+    `</blockquote>\n\n` +
+
+    `<b>3. Zero Tolerance for Fraud:</b>\n` +
+    `<blockquote>` +
+    `• Uploading forged, edited, reused, or fake transfer slips will lead to an <b>immediate and permanent account ban</b> without warning.` +
+    `</blockquote>\n\n` +
+
+    `<b>4. Fair Usage & Device Limits:</b>\n` +
+    `<blockquote>` +
+    `• <b>Device Limits:</b> Please strictly adhere to your plan's device limit (1 User / 2 Users / Unlimited Devices).\n` +
+    `• Keys are intended strictly for personal browsing, gaming, and secure communications.\n` +
+    `• Public key sharing, illegal cyber activities, DDoS, and torrent abuse that harm server stability are strictly prohibited.` +
+    `</blockquote>\n\n` +
+
+    `<b>5. Service Maintenance:</b>\n` +
+    `<blockquote>` +
+    `• Nodes and servers are actively monitored. In case of ISP blocks or network downtime, our team works to restore nodes as promptly as possible.` +
+    `</blockquote>\n\n` +
+
+    `<b>6. Final Authority:</b>\n` +
+    `<blockquote>` +
+    `• In case of any dispute or ambiguous transactions, the final decision rests solely with the Store Admin Team.` +
+    `</blockquote>\n\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n` +
+    `${e("WARNING", "⚠️")} <i>By depositing funds or making a purchase, you acknowledge and agree to comply with all store policies listed above.</i>`
+  );
+
     return;
   }
 
@@ -834,19 +938,19 @@ async function handleCallback(cb, env) {
   }
 
   if (data === "topup_custom") {
-    await env.DB.prepare("UPDATE users SET pending_topup_amount = -1 WHERE telegram_id = ?").bind(userId).run();
+    await env.DB.prepare("UPDATE users SET pending_topup_amount = -1, pending_plan_key = NULL WHERE telegram_id = ?").bind(userId).run();
     await editMsg(`${e("CUSTOM", "✍️")} Type deposit amount (Min: ${CONFIG.PAYMENT.MIN_TOPUP.toLocaleString()} MMK):`, { inline_keyboard: [[makeBtn("Deposit", "callback_data", "menu_topup", null, "BTN_DEPOSIT")]] });
     return;
   }
 
   if (data.startsWith("topup_amt_")) {
     const amount = Number(data.replace("topup_amt_", ""));
-    await env.DB.prepare("UPDATE users SET pending_topup_amount = ? WHERE telegram_id = ?").bind(amount, userId).run();
+    await env.DB.prepare("UPDATE users SET pending_topup_amount = ?, pending_plan_key = NULL WHERE telegram_id = ?").bind(amount, userId).run();
     await editMsg(MSG.getPaymentInfoMessage(amount), { inline_keyboard: [[makeBtn("Change Amount", "callback_data", "menu_topup", null, "BTN_CUSTOM")]] });
     return;
   }
 
-  // --- CATEGORY & PACKAGE SELECTION WITH DYNAMIC STOCK CHECK ---
+  // --- CATEGORY & PACKAGE SELECTION ---
   if (data === "menu_buy") {
     await editMsg(MSG.getCategorySelectMessage(), KB.getCategoryKeyboard());
     return;
@@ -878,13 +982,13 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Pay Direct
+  // --- PAY DIRECT: Plan Key ကို pending_plan_key တွင် မှတ်သားပေးခြင်း ---
   if (data.startsWith("pay_direct_")) {
     const pkgKey = data.replace("pay_direct_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
     if (!pkg) return;
 
-    await env.DB.prepare("UPDATE users SET pending_topup_amount = ? WHERE telegram_id = ?").bind(pkg.price, userId).run();
+    await env.DB.prepare("UPDATE users SET pending_topup_amount = ?, pending_plan_key = ? WHERE telegram_id = ?").bind(pkg.price, pkgKey, userId).run();
     await editMsg(MSG.getPaymentInfoMessage(pkg.price), {
       inline_keyboard: [
         [makeBtn("Back to Plans", "callback_data", `detail_pkg_${pkgKey}`, null, "BTN_BACK")]
@@ -893,7 +997,7 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // Buy with Wallet
+  // --- BUY WITH WALLET ---
   if (data.startsWith("buy_wallet_")) {
     const pkgKey = data.replace("buy_wallet_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
