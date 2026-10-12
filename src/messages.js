@@ -1,6 +1,5 @@
 import { CONFIG, e } from "./config.js";
 
-// Customer အမည်ကို privacy အရ ဖုံးအုပ်ပေးသည့် function
 export function maskName(name) {
   if (!name) return "Anonymous";
   const str = String(name).trim();
@@ -8,7 +7,6 @@ export function maskName(name) {
   return str.slice(0, 2) + "*".repeat(Math.max(1, str.length - 2));
 }
 
-// Myanmar Standard Time (UTC+6:30)
 export function formatMyanmarTime(dateObj) {
   try {
     return new Intl.DateTimeFormat("en-GB", {
@@ -25,7 +23,6 @@ export function formatMyanmarTime(dateObj) {
   }
 }
 
-// 1. Welcome Message
 export function getWelcomeMessage(firstName) {
   return (
     `${e("CROWN", "👑")} <b>Welcome to ${CONFIG.STORE_NAME}</b>\n` +
@@ -40,38 +37,85 @@ export function getWelcomeMessage(firstName) {
     `${e("STAR", "✨")} <b>Referral</b> — Invite friends & earn 5%\n` +
     `${e("TERMS", "📜")} <b>Terms</b> — Store rules & usage policies` +
     `</blockquote>\n\n` +
-    //`${e("CROWN", "👑")} <b>Channel: @jaiwateam</b>\n` +
     `${e("BUY", "👑")} <b>Sale Proved: @salesproved</b>\n\n` +
     `<b>Select an option below to continue.</b> ${e("DOWN", "👇")}`
   );
 }
 
-// 2. Package List
-export function getPackageListMessage(balance) {
+// Category Selection Message
+export function getCategorySelectMessage() {
   return (
-    `${e("SHOP", "🛍")} <b>Available Outline VPN Key Packages</b>\n` +
+    `${e("SHOP", "🛍")} <b>Select Package Category</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `${e("BALANCE", "💰")} <b>My Balance:</b> <code>${balance.toLocaleString()} MMK</code>\n\n` +
+    `ကျေးဇူးပြု၍ မိမိအသုံးပြုလိုသော Key အမျိုးအစားကို ရွေးချယ်ပေးပါ:\n\n` +
     `<blockquote>` +
-    `${e("OUTLINE", "🔹")} <b>50 GB Plan (30 Days)</b>\n` +
-    `• Data: 50 GB | High-Speed Singapore\n` +
-    `• Price: <b>2,500 MMK</b>\n` +
-    `</blockquote>\n` +
-    `<blockquote>` +
-    `${e("OUTLINE", "🔹")} <b>100 GB Plan (35 Days)</b>\n` +
-    `• Data: 100 GB | High-Speed Singapore\n` +
-    `• Price: <b>4,500 MMK</b> (Most Popular)\n` +
-    `</blockquote>\n` +
-    `<blockquote>` +
-    `${e("OUTLINE", "🔹")} <b>250 GB Plan (75 Days)</b>\n` +
-    `• Data: 250 GB | High-Speed Singapore\n` +
-    `• Price: <b>10,500 MMK</b> (Heavy User)\n` +
+    `1️⃣ <b>Limit data | unlimited user</b>\n` +
+    `• သတ်မှတ်ထားသော High-Speed Data ဖြစ်ပြီး Device အကန့်အသတ်မရှိ ချိတ်ဆက်နိုင်ပါသည်။\n\n` +
+    `2️⃣ <b>Unlimited Data | limited user</b>\n` +
+    `• Data အကန့်အသတ်မရှိ (Unlimited) ဖြစ်ပြီး သတ်မှတ် User/Device အရေအတွက်သာ သုံးနိုင်ပါသည်။` +
     `</blockquote>\n\n` +
-    `${e("FLASH", "⚡️")} <i>Choose a package below for automated instant key delivery:</i>`
+    `${e("DOWN", "👇")} <i>Choose a category below:</i>`
   );
 }
 
-// 3. Deposit / Payment Info
+// Category တစ်ခုချင်းစီအောက်ရှိ Package စာရင်းပြသခြင်း
+export function getPackageListMessage(balance, categoryType) {
+  const isLimited = categoryType === "limited_data";
+  const title = isLimited ? "Limit data | unlimited user" : "Unlimited Data | limited user";
+
+  let listHtml = "";
+  for (const [key, pkg] of Object.entries(CONFIG.PACKAGES)) {
+    if (pkg.category_type === categoryType) {
+      listHtml += 
+        `<blockquote>` +
+        `${e("OUTLINE", "🔹")} <b>${pkg.name}</b>\n` +
+        `• Details: ${pkg.detail}\n` +
+        `• Validity: <b>${pkg.days} Days</b>\n` +
+        `• Price: <b>${pkg.price.toLocaleString()} MMK</b>\n` +
+        `</blockquote>\n`;
+    }
+  }
+
+  return (
+    `${e("SHOP", "🛍")} <b>${title}</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `${e("BALANCE", "💰")} <b>My Balance:</b> <code>${balance.toLocaleString()} MMK</code>\n\n` +
+    listHtml + `\n` +
+    `${e("FLASH", "⚡️")} <i>Select a package below to view details and purchase:</i>`
+  );
+}
+
+// Plan Detail Message
+export function getPlanDetailMessage(pkgKey, balance) {
+  const pkg = CONFIG.PACKAGES[pkgKey];
+  return (
+    `${e("STOCK", "📦")} <b>Plan Detail & Purchase</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `<blockquote>` +
+    `• <b>Plan:</b> ${pkg.name}\n` +
+    `• <b>Data:</b> ${pkg.gb}\n` +
+    `• <b>Allowed Devices:</b> ${pkg.users}\n` +
+    `• <b>Duration:</b> ${pkg.days} Days\n` +
+    `• <b>Price:</b> <b>${pkg.price.toLocaleString()} MMK</b>\n` +
+    `• <b>Your Balance:</b> <b>${balance.toLocaleString()} MMK</b>` +
+    `</blockquote>\n\n` +
+    `${e("DOWN", "👇")} <i>Choose your preferred payment method below:</i>`
+  );
+}
+
+// Wallet Balance မလုံလောက်သည့် Message
+export function getInsufficientBalanceMessage(price, balance) {
+  return (
+    `${e("UNSTOCK", "😔")} <b>Insufficient Wallet Balance!</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `<blockquote>` +
+    `• Plan Price: <b>${price.toLocaleString()} MMK</b>\n` +
+    `• Your Balance: <b>${balance.toLocaleString()} MMK</b>` +
+    `</blockquote>\n\n` +
+    `Please top up your wallet balance to complete this purchase.`
+  );
+}
+
 export function getPaymentInfoMessage(amount) {
   return (
     `${e("DEPOSIT", "💳")} <b>Payment Transfer Instructions</b>\n` +
@@ -90,14 +134,13 @@ export function getPaymentInfoMessage(amount) {
   );
 }
 
-// 4. Instant Delivery
 export function getKeyDeliveryMessage(category, price, accessKey) {
   const pkg = CONFIG.PACKAGES[category] || { days: 30, gb: category };
   return (
     `${e("SUCCESS", "🎉")} <b>Purchase Successful!</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `<blockquote>` +
-    `• ${e("STOCK", "📦")} <b>Package:</b> ${pkg.gb} (${pkg.days} Days)\n` +
+    `• ${e("STOCK", "📦")} <b>Package:</b> ${pkg.name || pkg.gb} (${pkg.days} Days)\n` +
     `• ${e("BALANCE", "💰")} <b>Amount Paid:</b> ${price.toLocaleString()} MMK\n` +
     `• ${e("DATE", "📅")} <b>Delivered At:</b> ${formatMyanmarTime(new Date())}` +
     `</blockquote>\n\n` +
@@ -109,7 +152,6 @@ export function getKeyDeliveryMessage(category, price, accessKey) {
   );
 }
 
-// Public Channel Sale Alert
 export function getChannelSaleMessage(buyerName, category, price, accessKey) {
   const pkg = CONFIG.PACKAGES[category] || { days: 30, gb: category };
   return (
@@ -117,7 +159,7 @@ export function getChannelSaleMessage(buyerName, category, price, accessKey) {
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `<blockquote>` +
     `${e("PROFILE", "👤")} <b>Customer:</b> ${maskName(buyerName)}\n` +
-    `${e("STOCK", "📦")} <b>Package:</b> ${pkg.gb} (${pkg.days} Days)\n` +
+    `${e("STOCK", "📦")} <b>Package:</b> ${pkg.name || pkg.gb} (${pkg.days} Days)\n` +
     `${e("BALANCE", "💰")} <b>Amount Paid:</b> ${price.toLocaleString()} MMK\n` +
     `${e("DATE", "📅")} <b>Delivered At:</b> ${formatMyanmarTime(new Date())}\n` +
     `</blockquote>\n\n` +
@@ -125,7 +167,6 @@ export function getChannelSaleMessage(buyerName, category, price, accessKey) {
   );
 }
 
-// 5. Free Test Key Info
 export function getTestKeyInfoMessage() {
   return (
     `${e("FREEBIES", "🎁")} <b>Free Outline Test Key</b>\n` +
@@ -156,23 +197,23 @@ export function getTestKeyIntroMessage() {
   );
 }
 
-// Expiration Reminder Notification (English - Buy New Key Only)
+// Expiry Reminder Alarm
 export function getExpiryReminderMessage(buyerName, category, accessKey, daysLeft = 2) {
+  const pkg = CONFIG.PACKAGES[category] || { name: category.toUpperCase() };
   return (
-    `${e("WARNING", "⚠️")} <b>Outline Key Expiry Reminder</b>\n` +
+    `${e("ALARM", "🚨")} <b>Outline Key Expiry Reminder!</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `Hello <b>${buyerName}</b>,\n` +
-    `Your Outline VPN key for <b>${category.toUpperCase()}</b> will expire in <b>${daysLeft} days</b>.\n\n` +
+    `Your Outline VPN key for <b>${pkg.name}</b> will expire in <b>${daysLeft} days</b>.\n\n` +
     `<blockquote>` +
-    `• <b>Plan:</b> ${category.toUpperCase()}\n` +
-    `• <b>Status:</b> Expiring Soon\n` +
+    `• <b>Plan:</b> ${pkg.name}\n` +
+    `• <b>Remaining:</b> ${daysLeft} Days\n` +
     `• <b>Key:</b> <code>${accessKey}</code>` +
     `</blockquote>\n\n` +
     `<i>To maintain continuous VPN access, please purchase a new key before your current one expires.</i>`
   );
 }
 
-// Test Key Expired & Ready to Claim Again Notification
 export function getTestKeyExpiredMessage(buyerName) {
   return (
     `${e("FREEBIES", "🎁")} <b>Trial Period Ended</b>\n` +
@@ -209,9 +250,6 @@ export function getMustJoinMessage() {
     `After joining, tap <b>${e("DONE", "✅")} Check / Continue</b> below.`;
 }
 
-// --- NEW/UPDATED UI FLOW MESSAGES ---
-
-// Step 1: My Profile Message
 export function getProfileMessage(data) {
   const { firstName, telegramId, regDate, balance, totalOrders, totalSpent, totalDeposited, invitedCount, earnings, latestOrder, latestOrderDate } = data;
 
@@ -241,7 +279,7 @@ export function getProfileMessage(data) {
   if (latestOrder) {
     const pkg = CONFIG.PACKAGES[latestOrder.category] || { gb: latestOrder.category.toUpperCase() };
     msg += `<blockquote>` +
-           `• Plan: ${pkg.gb}\n` +
+           `• Plan: ${pkg.name || pkg.gb}\n` +
            `• Price: ${latestOrder.price.toLocaleString()} MMK\n` +
            `• Date: ${latestOrderDate}` +
            `</blockquote>`;
@@ -252,7 +290,6 @@ export function getProfileMessage(data) {
   return msg;
 }
 
-// Step 2: My Orders Summary Message 
 export function getOrdersSummaryMessage(totalOrders, totalSpent) { 
   let noteText = "";
   if (totalOrders > 0) { 

@@ -4,19 +4,13 @@ import { CONFIG, makeBtn } from "./config.js";
 export function getMainKeyboard() {
   return {
     inline_keyboard: [
-      [
-        makeBtn("Buy Outline Key", "callback_data", "menu_buy", "success", "BTN_SHOP")
-      ],
-      [
-        makeBtn("Free Test Key", "callback_data", "menu_test", null, "BTN_FREEBIES")
-      ],
+      [makeBtn("Buy Outline Key", "callback_data", "menu_buy", "success", "BTN_SHOP")],
+      [makeBtn("Free Test Key", "callback_data", "menu_test", null, "BTN_FREEBIES")],
       [
         makeBtn("Deposit", "callback_data", "menu_topup", null, "BTN_DEPOSIT"),
         makeBtn("My Profile", "callback_data", "menu_profile", null, "BTN_PROFILE")        
       ],
-      [
-        makeBtn("Refer & Earn", "callback_data", "menu_referral", null, "STAR" )
-      ],
+      [makeBtn("Refer & Earn", "callback_data", "menu_referral", null, "STAR")],
       [
         makeBtn("Contact Support", "url", `https://t.me/${CONFIG.ADMIN_USERNAME}`, null, "BTN_SUPPORT"),
         makeBtn("Terms of Service", "callback_data", "menu_terms", null, "BTN_TERMS")
@@ -25,14 +19,51 @@ export function getMainKeyboard() {
   };
 }
 
-// Packages Selection
-export function getBuyPackagesKeyboard() {
+// ၁။ Category ရွေးချယ်သည့် Keyboard (Buy ကို နှိပ်သည့်အခါ ပြသမည့် ခလုတ် ၃ ခု)
+export function getCategoryKeyboard() {
   return {
     inline_keyboard: [
-      [makeBtn("Buy 50 GB — 2,500 MMK", "callback_data", "buy_pkg_50gb_2500", "primary", "BTN_SHOP")],
-      [makeBtn("Buy 100 GB — 4,500 MMK", "callback_data", "buy_pkg_100gb_4500", "primary", "BTN_SHOP")],
-      [makeBtn("Buy 250 GB — 10,500 MMK", "callback_data", "buy_pkg_250gb_10500", "primary", "BTN_SHOP")],
-      [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
+      [makeBtn("Limit data | unlimited user", "callback_data", "cat_limited_data", "primary", "STOCK")],
+      [makeBtn("Unlimited Data | limited user", "callback_data", "cat_unlimited_data", "primary", "FLASH")],
+      [makeBtn("Home", "callback_data", "menu_home", null, "BTN_HOME")]
+    ]
+  };
+}
+
+// ၂။ သက်ဆိုင်ရာ Category အလိုက် Packages ရွေးချယ်သည့် Keyboard
+export function getCategoryPackagesKeyboard(categoryType) {
+  const rows = [];
+  if (categoryType === "limited_data") {
+    rows.push([makeBtn("Buy 50 GB — 2,500 MMK", "callback_data", "detail_pkg_50gb", "primary", "BTN_SHOP")]);
+    rows.push([makeBtn("Buy 100 GB — 4,500 MMK", "callback_data", "detail_pkg_100gb", "primary", "BTN_SHOP")]);
+    rows.push([makeBtn("Buy 250 GB — 10,500 MMK", "callback_data", "detail_pkg_250gb", "primary", "BTN_SHOP")]);
+  } else {
+    rows.push([makeBtn("1 Month | 1 User — 6,000 MMK", "callback_data", "detail_pkg_1m_1u", "primary", "BTN_SHOP")]);
+    rows.push([makeBtn("1 Month | 2 Users — 10,000 MMK", "callback_data", "detail_pkg_1m_2u", "primary", "BTN_SHOP")]);
+    rows.push([makeBtn("3 Months | 1 User — 16,000 MMK", "callback_data", "detail_pkg_3m_1u", "primary", "BTN_SHOP")]);
+    rows.push([makeBtn("3 Months | 2 Users — 27,000 MMK", "callback_data", "detail_pkg_3m_2u", "primary", "BTN_SHOP")]);
+  }
+  rows.push([makeBtn("Back to Categories", "callback_data", "menu_buy", null, "BTN_BACK")]);
+  return { inline_keyboard: rows };
+}
+
+// ၃။ Plan Detail စာမျက်နှာတွင် ပြသမည့် Payment Method ခလုတ်များ
+export function getPlanPaymentMethodKeyboard(categoryKey, categoryType) {
+  return {
+    inline_keyboard: [
+      [makeBtn("Buy with wallet", "callback_data", `buy_wallet_${categoryKey}`, "success", "WALLET")],
+      [makeBtn("Pay Direct", "callback_data", `pay_direct_${categoryKey}`, "primary", "KPAY")],
+      [makeBtn("Back to Plans", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
+    ]
+  };
+}
+
+// ၄။ Balance မလုံလောက်သည့်အခါ ပြသမည့် Keyboard (Deposit wallet နှင့် Back)
+export function getInsufficientBalanceKeyboard(categoryType) {
+  return {
+    inline_keyboard: [
+      [makeBtn("Deposit wallet", "callback_data", "menu_topup", "primary", "BTN_DEPOSIT")],
+      [makeBtn("Back", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
     ]
   };
 }
@@ -50,9 +81,6 @@ export function getTopupKeyboard() {
   };
 }
 
-// --- NEW/UPDATED UI FLOW KEYBOARDS ---
-
-// Step 1: Profile View
 export function getProfileKeyboard() {
   return {
     inline_keyboard: [
@@ -66,12 +94,9 @@ export function getProfileKeyboard() {
   };
 }
 
-// Step 2: Profile Orders Pagination (Single column list format as requested)
 export function getProfileOrdersKeyboard(orders, page, totalPages) {
   let inlineKeyboard = [];
-
   orders.forEach((o) => {
-    // Renders: [🔑 #ID · Category · Price MMK]
     inlineKeyboard.push([
       makeBtn(`#${o.id} · ${o.category.toUpperCase()} · ${o.price.toLocaleString()} MMK`, "callback_data", `view_ord_${o.id}_${page}`, null, "BTN_KEY")
     ]);
@@ -87,11 +112,9 @@ export function getProfileOrdersKeyboard(orders, page, totalPages) {
       makeBtn("Back", "callback_data", "menu_profile", null, "BTN_BACK"),
       makeBtn("Home", "callback_data", "menu_home", null, "BTN_HOME")
   ]);
-  
   return { inline_keyboard: inlineKeyboard };
 }
 
-// Step 3: Key Detail View (Copy & Delete Buttons returning precisely to originating page)
 export function getKeyDetailKeyboard(orderId, page, accessKey) {
   const safeKey = accessKey || "No-Key-Found";
   return {
@@ -103,7 +126,6 @@ export function getKeyDetailKeyboard(orderId, page, accessKey) {
   };
 }
 
-// Delete Confirmation Keyboard
 export function getDeleteConfirmKeyboard(orderId, page) {
   return {
     inline_keyboard: [
@@ -113,7 +135,6 @@ export function getDeleteConfirmKeyboard(orderId, page) {
   };
 }
 
-// Public sales channel
 export function getSalesChannelKeyboard() {
   return {
     inline_keyboard: [
@@ -122,7 +143,6 @@ export function getSalesChannelKeyboard() {
   };
 }
 
-// Payment Admin Audit Keyboard (Group ထဲတွင် Approve = Primary, Reject/Ban = Danger)
 export function getPaymentAdminKeyboard(requestId, targetUserId, amount) {
   return {
     inline_keyboard: [
@@ -135,7 +155,6 @@ export function getPaymentAdminKeyboard(requestId, targetUserId, amount) {
   };
 }
 
-// Stock Group Refresh Keyboard
 export function getStockRefreshKeyboard() {
   return {
     inline_keyboard: [
@@ -144,7 +163,6 @@ export function getStockRefreshKeyboard() {
   };
 }
 
-// Test Key Delivery & View Keyboard (Copy Button ပါဝင်သည်)
 export function getTestKeyActionKeyboard(accessKey) {
   const safeKey = accessKey || "No-Key-Found";
   return {
@@ -155,7 +173,6 @@ export function getTestKeyActionKeyboard(accessKey) {
   };
 }
 
-// Payment Group: Stats Refresh Keyboard
 export function getStatsRefreshKeyboard() {
   return {
     inline_keyboard: [
