@@ -1,6 +1,6 @@
 export const CONFIG = {
   STORE_NAME: "Nevera Key Store",
-  ADMIN_USERNAME: "nevera33",
+  ADMIN_USERNAME: ["nevera33", "JaiwaJG"],
   BOT_USERNAME: "neveravpnbot",
 
   REFERRAL_PERCENT: 5, // 5% Commission

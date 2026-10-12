@@ -155,6 +155,7 @@ async function checkIsAdmin(env, chatId, user) {
   return memberData?.ok && ["creator", "administrator"].includes(memberData?.result?.status);
 }
 
+
 async function checkMustJoin(env, userId) {
   if (!CONFIG.FORCE_JOIN?.ENABLED) return true;
   try {
