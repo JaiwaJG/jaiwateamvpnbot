@@ -1,4 +1,15 @@
-import { CONFIG, e } from "./config.js";
+import { CONFIG } from "./config.js";
+// Helper for rendering Telegram custom emojis safely without scope clash 
+export function e(emojiType, fallbackUnicode = "") { 
+  try { const id = CONFIG?.EMOJIS?.[emojiType]; 
+    if (id && String(id).trim() !== "") { 
+      return <tg-emoji emoji-id="${String(id).trim()}">${fallbackUnicode}</tg-emoji>; 
+    } 
+    return fallbackUnicode; } 
+    catch (err) { 
+      return fallbackUnicode; 
+    } 
+  }
 
 export function maskName(name) {
   if (!name) return "Anonymous";
