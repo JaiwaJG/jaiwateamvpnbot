@@ -927,7 +927,31 @@ async function handleCallback(cb, env) {
 
   // Terms & Topup
   if (data === "menu_terms") {
-    await editMsg(`${e("TERMS", "📜")} <b>Terms of Service & Usage Policies</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n• All wallet top-ups and key sales are non-refundable.\n• Leaving transfer notes with words like "VPN", "Outline" is strictly prohibited.\n• Fraudulent transaction slips will result in an immediate permanent ban.`, { inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]] });
+    const termsMsg = 
+      `${e("TERMS", "📜")} <b>Terms of Service & Store Policies</b>\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+      `Please read and understand our store policies before proceeding:\n\n` +
+      `<b>1. Strict No-Refund Policy:</b>\n` +
+      `<blockquote>• All wallet top-ups and key purchases are final and non-refundable under any circumstances.</blockquote>\n` +
+      `<b>2. Payment Transfer Rules:</b>\n` +
+      `<blockquote>• Supported Methods: <b>KBZPay, AYAPay, UABPay</b>.\n` +
+      `• <b>Strictly leave the transfer note/remark EMPTY</b>. Do NOT write "VPN", "Key", "Bot", or any related words.\n` +
+      `• Violating this rule will result in immediate rejection, and funds will NOT be credited.</blockquote>\n` +
+      `• <b>Processing Time:</b> Transactions are typically verified within <b>5 minutes to a maximum of 24 hours</b>. Wallet balance will be credited immediately once approved by the Admin Team.\n` +
+      `<b>3. Fraud Prevention & Zero Tolerance:</b>\n` +
+      `<blockquote>• Submitting altered, fake, reused, or forged payment slips will result in an immediate and permanent BAN of your Telegram ID and Account across all our services without warning.</blockquote>\n` +
+      `<b>4. Fair Usage Policy:</b>\n` +
+      `<blockquote>• Keys are optimized for personal, non-abusive usage.\n` +
+      `• Reselling, public sharing, torrent abuse, or malicious activities that degrade server performance for others are strictly prohibited. Accounts violating fair use may be revoked.</blockquote>\n` +
+      `<b>5. Service Uptime & Maintenance:</b>\n` +
+      `<blockquote>• In the event of network disruption, IP filtering, or server downtime, our team will investigate and restore nodes as quickly as possible (typically within 24 hours).</blockquote>\n` +
+      `<b>6. Final Authority:</b>\n` +
+      `<blockquote>• In the event of any disputes, transaction discrepancies, or policy enforcement, the final decision rests solely with the Admin Team.</blockquote>\n` +
+      `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+      `${e("WARNING", "⚠️")} <b>By using our bot and depositing funds, you fully agree to comply with all the terms above.</b>`;
+    await editMsg(termsMsg, {
+      inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]]
+    });
     return;
   }
 

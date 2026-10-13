@@ -38,7 +38,8 @@ export function getWelcomeMessage(firstName) {
     `${e("STAR", "✨")} <b>Referral</b> — Invite friends & earn 5%\n` +
     `${e("TERMS", "📜")} <b>Terms</b> — Store rules & usage policies` +
     `</blockquote>\n\n` +
-    `${e("BUY", "👑")} <b>Sale Proved: @salesproved</b>\n\n` +
+    `${e("CROWN", "👑")} <b>Channel: @jaiwateam</b>\n`
+    `${e("BUY", "👑")} <b>Sale Proved: @sales_proved</b>\n\n` +
     `<b>Select an option below to continue.</b> ${e("DOWN", "👇")}`
   );
 }
@@ -49,9 +50,11 @@ export function getCategorySelectMessage() {
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `Please choose your desired key package category:\n\n` +
     `<blockquote>` +
-    `1️⃣ <b>Limited Data | Unlimited Users</b>\n` +
-    `• High-speed data quota with unlimited simultaneous device connections.\n\n` +
-    `2️⃣ <b>Unlimited Data | Limited Users</b>\n` +
+    `1 <b>Limited Data | Unlimited Users</b>\n` +
+    `• High-speed data quota with unlimited simultaneous device connections.\n` +
+    `</blockquote>\n\n` +
+    `<blockquote>` +
+    `2 <b>Unlimited Data | Limited Users</b>\n` +
     `• 100% Unlimited high-speed data with dedicated device quota.` +
     `</blockquote>\n\n` +
     `${e("DOWN", "👇")} <i>Choose a category below to continue:</i>`
@@ -127,7 +130,8 @@ export function getPaymentInfoMessage(amount) {
     `Please transfer the exact amount to one of our verified accounts:\n\n` +
     `<blockquote>` +
     `${e("KPAY", "📱")} <b>KBZPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
-    `${e("WAVEPAY", "📱")} <b>WAVEPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
+    `${e("AYAPAY", "📱")} <b>AYAPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
+    `${e("UABPAY", "📱")} <b>UABPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n` +
     `</blockquote>\n\n` +
     `${e("WARNING", "⚠️")} <b>Important Transfer Rules:</b>\n` +
     `• Do <b>NOT</b> write <b>VPN</b>, <b>Outline</b>, or <b>Store names</b> in the transaction note.\n` +
