@@ -127,7 +127,8 @@ export function getPaymentInfoMessage(amount) {
     `Please transfer the exact amount to one of our verified accounts:\n\n` +
     `<blockquote>` +
     `${e("KPAY", "📱")} <b>KBZPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
-    `${e("WAVEPAY", "📱")} <b>WAVEPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
+    `${e("AYAPAY", "📱")} <b>AYAPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n\n` +
+    `${e("UABPAY", "📱")} <b>UABPay:</b> <code>${CONFIG.PAYMENT.PHONE}</code> <b>${CONFIG.PAYMENT.NAME}</b>\n` +
     `</blockquote>\n\n` +
     `${e("WARNING", "⚠️")} <b>Important Transfer Rules:</b>\n` +
     `• Do <b>NOT</b> write <b>VPN</b>, <b>Outline</b>, or <b>Store names</b> in the transaction note.\n` +

@@ -1,7 +1,8 @@
 {
-  "name": "nevera-bot",
+  "name": "jaiwateamvpnbot",
   "version": "1.0.0",
   "main": "src/index.js",
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy"
   },

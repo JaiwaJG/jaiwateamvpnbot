@@ -1,7 +1,7 @@
 export const CONFIG = {
-  STORE_NAME: "Nevera Key Store",
-  ADMIN_USERNAME: ["nevera33", "JaiwaJG"],
-  BOT_USERNAME: "neveravpnbot",
+  STORE_NAME: "JAIWATeam VPN Store",
+  ADMIN_USERNAME: "JaiwaJG",
+  BOT_USERNAME: "jaiwateamvpnbot",
 
   REFERRAL_PERCENT: 5, // 5% Commission
 
@@ -13,8 +13,8 @@ export const CONFIG = {
 
   // 📱 Payment Information
   PAYMENT: {
-    PHONE: "09665326150",
-    NAME: "Ma Yar Thi Chan",
+    PHONE: "09456545321",
+    NAME: "Gum Seng Lat",
     MIN_TOPUP: 2500,
   },
 
