@@ -53,7 +53,7 @@ export function getPlanPaymentMethodKeyboard(categoryKey, categoryType) {
   return {
     inline_keyboard: [
       [makeBtn("Buy with Wallet", "callback_data", `buy_wallet_${categoryKey}`, "success", "WALLET")],
-      [makeBtn("Pay Direct (Manual Slip)", "callback_data", `pay_direct_${categoryKey}`, "primary", "KPAY")],
+      [makeBtn("Pay Direct", "callback_data", `pay_direct_${categoryKey}`, "primary", "PAY")],
       [makeBtn("Back to Plans", "callback_data", `cat_${categoryType}`, null, "BTN_BACK")]
     ]
   };
