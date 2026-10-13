@@ -1,4 +1,4 @@
-import { CONFIG, e, makeBtn } from "./config.js";
+import { CONFIG, makeBtn } from "./config.js";
 import * as KB from "./keyboards.js";
 import * as MSG from "./messages.js";
 const e =MSG.e;
