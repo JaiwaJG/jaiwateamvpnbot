@@ -208,3 +208,14 @@ export function getMustJoinKeyboard(channelLink) {
     ]
   };
 }
+
+export function getSupportKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME"),
+        makeBtn("Contact Support", "url", `https://t.me/JaiwaJG`, null, "BTN_SUPPORT")
+      ]
+    ]
+  };
+}

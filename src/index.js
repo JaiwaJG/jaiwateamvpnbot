@@ -751,9 +751,9 @@ async function handleCallback(cb, env) {
 
         await tg(env, "sendMessage", {
           chat_id: targetUserId,
-          text: `${e("FALSE", "❌")} <b>Deposit Verification Failed:</b> We could not verify your transaction slip. Please check your transfer details or contact support.`,
+          text: `${e("FALSE", "❌")} <b>Deposit Verification Failed:\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n</b> We could not verify your transaction slip. Please check your transfer details or contact support.`,
           parse_mode: "HTML",
-          reply_markup: KB.getMainKeyboard()
+          reply_markup: KB.getSupportKeyboard()
         });
       } catch (err) {
         console.error("Reject Error:", err);
@@ -779,7 +779,7 @@ async function handleCallback(cb, env) {
 
         await tg(env, "sendMessage", {
           chat_id: targetUserId,
-          text: `${e("BAN", "🚫")} <b>Account Suspended:</b> Your account has been permanently banned due to fraudulent slip submission.`,
+          text: `${e("BAN", "🚫")} <b>Account Suspended:\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n</b> Your account has been permanently banned due to fraudulent slip submission.`,
           parse_mode: "HTML"
         });
       } catch (err) {
@@ -792,7 +792,7 @@ async function handleCallback(cb, env) {
     if (data === "admin_refresh_stats") {
       const reportText = await getStoreAnalyticsReport(env);
       await editMsg(reportText, KB.getStatsRefreshKeyboard());
-      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "🔄 Stats Updated!" });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `${e("BTN_REFRESH", "🔄")} Stats Updated!` });
       return;
     }
   }
@@ -808,7 +808,7 @@ async function handleCallback(cb, env) {
     stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> keys\n`;
 
     await editMsg(stockMsg, KB.getStockRefreshKeyboard());
-    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Stock Refreshed!" });
+    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `${e("BTN_REFRESH", "🔄")} Stock Refreshed!` });
     return;
   }
 
@@ -950,7 +950,7 @@ async function handleCallback(cb, env) {
 
       `<b>5. Service Uptime & Maintenance:</b>\n` +
       `<blockquote>• In the event of network disruption, IP filtering, or server downtime, our team will investigate and restore nodes as quickly as possible (typically within 24 hours).</blockquote>\n` +
-      
+
       `<b>6. Final Authority:</b>\n` +
       `<blockquote>• In the event of any disputes, transaction discrepancies, or policy enforcement, the final decision rests solely with the Admin Team.</blockquote>\n` +
       `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
