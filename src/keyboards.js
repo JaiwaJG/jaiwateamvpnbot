@@ -11,7 +11,7 @@ export function getMainKeyboard() {
       ],
       [makeBtn("Refer & Earn", "callback_data", "menu_referral", null, "STAR")],
       [
-        makeBtn("Contact Support", "url", `https://t.me/nevera33`, null, "BTN_SUPPORT"),
+        makeBtn("Contact Support", "url", `https://t.me/JaiwaJG`, null, "BTN_SUPPORT"),
         makeBtn("Terms of Service", "callback_data", "menu_terms", null, "BTN_TERMS")
       ]
     ]

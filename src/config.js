@@ -154,7 +154,7 @@ export const CONFIG = {
     BTN_TERMS: "5258503720928288433",
     BTN_CUSTOM: "5470060791883374114",
     BTN_HOME: "5257963315258204021",
-    BTN_SUPPORT: "5328121752067258288",
+    BTN_SUPPORT: "6057677034543391682",
     BTN_APPROVE: "5260463209562776385",
     BTN_REJECT: "5974083768233760323",
     BTN_KEY: "5330115548900501467",
@@ -169,13 +169,14 @@ export const CONFIG = {
   }
 };
 
-export function e(emojiType, fallbackUnicode = "") {
-  const emojiId = CONFIG.EMOJIS[emojiType];
-  if (emojiId && emojiId.trim() !== "") {
-    return `<tg-emoji emoji-id="${emojiId.trim()}">${fallbackUnicode}</tg-emoji>`;
-  }
-  return fallbackUnicode;
-}
+export function e(emojiType, fallbackUnicode = "") { 
+  try { 
+    const emojiId = CONFIG?.EMOJIS?.[emojiType]; 
+    if (emojiId && String(emojiId).trim() !== "") { 
+      return `<tg-emoji emoji-id="${String(emojiId).trim()}">${fallbackUnicode}</tg-emoji>`; } 
+    return fallbackUnicode; } 
+    catch (err) { 
+      return fallbackUnicode; } }
 
 export function btnIcon(emojiType, colorTheme = "PRIMARY", fallbackUnicode = "") {
   const theme = CONFIG.BUTTON_THEMES[colorTheme] || "";

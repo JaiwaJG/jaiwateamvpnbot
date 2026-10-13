@@ -3,7 +3,7 @@ import { CONFIG } from "./config.js";
 export function e(emojiType, fallbackUnicode = "") { 
   try { const id = CONFIG?.EMOJIS?.[emojiType]; 
     if (id && String(id).trim() !== "") { 
-      return <tg-emoji emoji-id="${String(id).trim()}">${fallbackUnicode}</tg-emoji>; 
+      return `<tg-emoji emoji-id="${String(id).trim()}">${fallbackUnicode}</tg-emoji>`; 
     } 
     return fallbackUnicode; } 
     catch (err) { 
@@ -380,7 +380,6 @@ export function formatStoreAnalyticsReport(data) {
   stockLines += `• <b>Free Test Keys:</b> ${fmt(stockMap["test"] || 0)} Available`;
 
   return (
-    `<b>${CONFIG.STORE_NAME}</b>\n` +
     `${e("STATUS", "📊")} <b>Store Analytics & Executive Report</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `${e("BALANCE", "💎")} <b>Revenue & Cash Flow</b>\n` +
