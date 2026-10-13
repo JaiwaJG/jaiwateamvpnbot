@@ -21,12 +21,12 @@ export default {
     return new Response("OK");
   },
 
-  // ⏰ Cloudflare Cron Trigger (Expiry Alarm to User + Test Key Auto Clear)
+  // ⏰ Cloudflare Cron Trigger (Test Key Noti + Regular Expiry Alarm)
   async scheduled(event, env, ctx) {
     try {
       const now = new Date();
 
-      // 1. Expired Free Test Keys Notification
+      // 1. Expired Free Test Keys Notification to User
       const expiredTests = await env.DB.prepare(`
         SELECT orders.*, users.first_name 
         FROM orders 
@@ -50,7 +50,7 @@ export default {
             parse_mode: "HTML",
             reply_markup: {
               inline_keyboard: [
-                [makeBtn("Get New Test Key", "callback_data", "menu_test", null, "BTN_FREEBIES")],
+                [makeBtn("Claim Free Test Key", "callback_data", "menu_test", "success", "BTN_FREEBIES")],
                 [makeBtn("Buy Outline Key", "callback_data", "menu_buy", null, "BTN_SHOP")]
               ]
             }
@@ -58,6 +58,7 @@ export default {
         }
       }
 
+      // Clear test keys older than 30 days
       await env.DB.prepare(`
         DELETE FROM orders 
         WHERE category = 'test' 
@@ -210,6 +211,53 @@ async function getOrCreateUser(env, from, referrerId = null) {
   return user;
 }
 
+// ပုံ ၁ အတိုင်း Store Analytics Report တွက်ချက်သည့် Function
+async function getStoreAnalyticsReport(env) {
+  const fmtNum = (n) => Number(n || 0).toLocaleString();
+  const nowStr = new Date().toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+    timeZone: "Asia/Yangon"
+  });
+
+  const totalRevRes = await env.DB.prepare("SELECT SUM(price) as total_rev, COUNT(*) as total_orders FROM orders WHERE category != 'test'").first();
+  const todayRes = await env.DB.prepare("SELECT SUM(price) as today_rev, COUNT(*) as today_orders FROM orders WHERE category != 'test' AND date(datetime(created_at, '+6 hours', '+30 minutes')) = date(datetime('now', '+6 hours', '+30 minutes'))").first();
+  const yestRes = await env.DB.prepare("SELECT COALESCE(SUM(price), 0) AS rev, COUNT(*) AS orders FROM orders WHERE category != 'test' AND date(datetime(created_at, '+6 hours', '+30 minutes')) = date(datetime('now', '+6 hours', '+30 minutes', '-1 day'))").first();
+  const monthRes = await env.DB.prepare("SELECT COALESCE(SUM(price), 0) AS rev, COUNT(*) AS orders FROM orders WHERE category != 'test' AND strftime('%Y-%m', datetime(created_at, '+6 hours', '+30 minutes')) = strftime('%Y-%m', datetime('now', '+6 hours', '+30 minutes'))").first();
+
+  const pkgRows = await env.DB.prepare("SELECT category, COUNT(*) AS count, COALESCE(SUM(price), 0) AS rev FROM orders WHERE category != 'test' GROUP BY category").all();
+  let pkgBreakdownText = pkgRows?.results?.length > 0 
+    ? pkgRows.results.map(r => `• <b>${r.category}:</b> ${r.count} Sold (${fmtNum(r.rev)} MMK)`).join("\n") 
+    : "• <i>No sales yet</i>";
+
+  const refRes = await env.DB.prepare("SELECT COALESCE(SUM(referral_earnings), 0) AS total_ref FROM users").first();
+  const totalUsersRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users").first();
+  const bannedUsersRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users WHERE is_banned = 1").first();
+  const activeKeysRes = await env.DB.prepare("SELECT COUNT(DISTINCT user_id) as count FROM orders").first();
+
+  const stockMap = await getStockCountMap(env);
+  const pendingAuditRes = await env.DB.prepare("SELECT COUNT(*) as count FROM topup_requests WHERE status = 'pending'").first();
+
+  return MSG.formatStoreAnalyticsReport({
+    todayRev: todayRes?.today_rev || 0,
+    todayOrders: todayRes?.today_orders || 0,
+    yestRev: yestRes?.rev || 0,
+    yestOrders: yestRes?.orders || 0,
+    monthRev: monthRes?.rev || 0,
+    monthOrders: monthRes?.orders || 0,
+    totalRev: totalRevRes?.total_rev || 0,
+    totalOrders: totalRevRes?.total_orders || 0,
+    pkgBreakdownText,
+    totalRef: refRes?.total_ref || 0,
+    totalUsers: totalUsersRes?.count || 0,
+    activeUsers: activeKeysRes?.count || 0,
+    bannedUsers: bannedUsersRes?.count || 0,
+    stockMap,
+    pendingAudit: pendingAuditRes?.count || 0,
+    nowStr
+  });
+}
+
 async function handleMessage(msg, env) {
   const chatId = String(msg.chat.id);
   const text = (msg.text || "").trim();
@@ -308,7 +356,7 @@ async function handleMessage(msg, env) {
       return;
     }
 
-    // Slip Photo Submission Handler (Pay Direct & Normal Deposit)
+    // Slip Photo Submission Handler
     if (msg.photo && msg.photo.length > 0) {
       const currentAmt = Number(user.pending_topup_amount || 0);
       const planKey = user.pending_plan_key || null;
@@ -410,6 +458,7 @@ async function handleMessage(msg, env) {
       return;
     }
 
+    // Wallet Balance Add / Deduct with Automated User Notification
     if (/^\/(addbal|addbl|subbal)\b/i.test(text)) {
       const parts = text.split(/\s+/);
       const cmd = parts[0].toLowerCase();
@@ -453,6 +502,19 @@ async function handleMessage(msg, env) {
         text: `${isAdd ? e("SUCCESS", "✅") : e("WARNING", "🔻")} <b>Balance Updated:</b>\n• User: ${targetUser.first_name} (<code>${targetUser.telegram_id}</code>)\n• Action: ${isAdd ? "Credited (+)" : "Deducted (-)"} <b>${amount.toLocaleString()} MMK</b>\n• New Balance: <b>${newBal.toLocaleString()} MMK</b>`,
         parse_mode: "HTML"
       });
+
+      // User ထံသို့ Balance အတိုး/အလျော့ အသိပေးစာ တိုက်ရိုက် ပို့ပေးခြင်း
+      try {
+        const userNotice = isAdd
+          ? `${e("SUCCESS", "🎉")} <b>Balance Credited!</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\nAdmin has added <b>+${amount.toLocaleString()} MMK</b> to your wallet.\n\n${e("BALANCE", "💰")} <b>Current Balance:</b> <code>${newBal.toLocaleString()} MMK</code>`
+          : `${e("WARNING", "⚠️")} <b>Balance Deducted!</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\nAdmin has deducted <b>-${amount.toLocaleString()} MMK</b> from your wallet.\n\n${e("BALANCE", "💰")} <b>Current Balance:</b> <code>${newBal.toLocaleString()} MMK</code>`;
+        
+        await tg(env, "sendMessage", {
+          chat_id: targetUser.telegram_id,
+          text: userNotice,
+          parse_mode: "HTML"
+        });
+      } catch (err) {}
       return;
     }
 
@@ -524,28 +586,6 @@ async function handleMessage(msg, env) {
   }
 }
 
-async function getStoreAnalyticsReport(env) {
-  const fmtNum = (n) => Number(n || 0).toLocaleString();
-  const nowStr = new Date().toLocaleString("en-US", {
-    day: "numeric", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: true,
-    timeZone: "Asia/Yangon"
-  });
-
-  const totalRevRes = await env.DB.prepare("SELECT SUM(price) as total_rev, COUNT(*) as total_orders FROM orders WHERE category != 'test'").first();
-  const todayRes = await env.DB.prepare("SELECT SUM(price) as today_rev, COUNT(*) as today_orders FROM orders WHERE category != 'test' AND date(datetime(created_at, '+6 hours', '+30 minutes')) = date(datetime('now', '+6 hours', '+30 minutes'))").first();
-  const totalUsersRes = await env.DB.prepare("SELECT COUNT(*) as count FROM users").first();
-  const pendingAuditRes = await env.DB.prepare("SELECT COUNT(*) as count FROM topup_requests WHERE status = 'pending'").first();
-
-  return `${e("STATUS", "📊")} <b>Store Analytics & Revenue Report</b>\n` +
-    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `• <b>Today Sales:</b> ${fmtNum(todayRes?.today_rev)} MMK (${fmtNum(todayRes?.today_orders)} Orders)\n` +
-    `• <b>All-Time Revenue:</b> ${fmtNum(totalRevRes?.total_rev)} MMK (${fmtNum(totalRevRes?.total_orders)} Completed Orders)\n` +
-    `• <b>Total Registered Users:</b> ${fmtNum(totalUsersRes?.count)}\n` +
-    `• <b>Pending Audit Queue:</b> ${fmtNum(pendingAuditRes?.count)} Slips\n\n` +
-    `<i>Last updated: ${nowStr}</i>`;
-}
-
 // Callback Processor
 async function handleCallback(cb, env) {
   const userId = cb.from.id;
@@ -566,7 +606,6 @@ async function handleCallback(cb, env) {
     });
   }
 
-  // --- Out of stock prompt ---
   if (data.startsWith("out_of_stock_")) {
     await tg(env, "answerCallbackQuery", {
       callback_query_id: callbackId,
@@ -584,7 +623,7 @@ async function handleCallback(cb, env) {
       return;
     }
 
-    // 1. APPROVE SLIP (Pay Direct Plan Auto Delivery OR Normal Wallet Deposit)
+    // 1. APPROVE SLIP
     if (data.startsWith("pay_app_")) {
       const parts = data.split("_");
       const reqId = parts[2];
@@ -592,12 +631,10 @@ async function handleCallback(cb, env) {
       const amount = Number(parts[4]);
 
       try {
-        // Request မှ plan_key ပါ/မပါ စစ်ဆေးခြင်း
         const reqRow = await env.DB.prepare("SELECT plan_key FROM topup_requests WHERE id = ?").bind(reqId).first();
         const planKey = reqRow?.plan_key;
 
         if (planKey && CONFIG.PACKAGES[planKey]) {
-          // --- CASE A: DIRECT PURCHASE PLAN DELIVER ---
           const keyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = ? LIMIT 1").bind(planKey).first();
 
           if (!keyItem) {
@@ -609,7 +646,6 @@ async function handleCallback(cb, env) {
             return;
           }
 
-          // Database တွင် key ဖျက်ခြင်း၊ orders ထဲသို့ ထည့်ခြင်းနှင့် status ပြောင်းခြင်း
           await env.DB.batch([
             env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(keyItem.id),
             env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, ?, ?, ?)").bind(targetUserId, planKey, keyItem.access_key, amount),
@@ -626,7 +662,6 @@ async function handleCallback(cb, env) {
 
           await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `✅ Approved & Delivered ${planKey.toUpperCase()} Key!` });
 
-          // User ထံသို့ ပုံထဲကအတိုင်း Purchase Successful နှင့် Key တိုက်ရိုက် ပို့ပေးခြင်း
           await tg(env, "sendMessage", {
             chat_id: targetUserId,
             text: MSG.getKeyDeliveryMessage(planKey, amount, keyItem.access_key),
@@ -639,7 +674,6 @@ async function handleCallback(cb, env) {
             }
           });
 
-          // Sales Channel Alert
           const salesChannelId = String(env.SALES_CHANNEL_ID || "").trim();
           if (salesChannelId) {
             try {
@@ -653,7 +687,6 @@ async function handleCallback(cb, env) {
             } catch (_) {}
           }
         } else {
-          // --- CASE B: NORMAL WALLET TOP-UP ---
           await env.DB.batch([
             env.DB.prepare("UPDATE users SET balance = balance + ?, last_topup_at = datetime('now', '+6 hours', '+30 minutes') WHERE telegram_id = ?").bind(amount, targetUserId),
             env.DB.prepare("UPDATE topup_requests SET status = 'approved' WHERE id = ?").bind(reqId)
@@ -676,7 +709,6 @@ async function handleCallback(cb, env) {
           });
         }
 
-        // Referral commission check
         const targetUser = await env.DB.prepare("SELECT referred_by FROM users WHERE telegram_id = ?").bind(targetUserId).first();
         if (targetUser && targetUser.referred_by) {
           const bonusAmount = Math.floor(amount * ((CONFIG.REFERRAL_PERCENT || 5) / 100));
@@ -755,10 +787,11 @@ async function handleCallback(cb, env) {
       return;
     }
 
+    // ပုံ ၁ အတိုင်း Stats Refresh နှိပ်သည့်အခါ ပြန်လည် Update ပြုလုပ်ခြင်း
     if (data === "admin_refresh_stats") {
       const reportText = await getStoreAnalyticsReport(env);
       await editMsg(reportText, KB.getStatsRefreshKeyboard());
-      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Stats Refreshed!" });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "🔄 Stats Updated!" });
       return;
     }
   }
@@ -843,12 +876,15 @@ async function handleCallback(cb, env) {
     const totalOrders = orderStats?.count || 0;
     const totalSpent = orderStats?.spent || 0;
     const totalPages = Math.ceil(totalOrders / pageSize) || 1;
-    const ordersRes = await env.DB.prepare("SELECT id, category, price, created_at FROM orders WHERE user_id = ? AND category != 'test' ORDER BY id DESC LIMIT ? OFFSET ?").bind(userId, pageSize, offset).all();
+    const ordersRes = await env.DB.prepare(
+      "SELECT id, category, price, created_at FROM orders WHERE user_id = ? AND category != 'test' ORDER BY id DESC LIMIT ? OFFSET ?"
+    ).bind(userId, pageSize, offset).all();
 
     await editMsg(MSG.getOrdersSummaryMessage(totalOrders, totalSpent), KB.getProfileOrdersKeyboard(ordersRes.results || [], page, totalPages));
     return;
   }
 
+  // ပုံ ၂ အတိုင်း Key Details Viewer Handling
   if (data.startsWith("view_ord_")) {
     const parts = data.split("_");
     const orderId = parts[2];
@@ -858,15 +894,20 @@ async function handleCallback(cb, env) {
 
     const pkgInfo = CONFIG.PACKAGES[order.category] || { days: 30, gb: order.category };
     const buyDate = parseDbDate(order.created_at);
-    const expiryDate = new Date(buyDate.getTime() + pkgInfo.days * 24 * 60 * 60 * 1000);
+    const expiryDate = new Date(buyDate.getTime() + (pkgInfo.days || 30) * 24 * 60 * 60 * 1000);
     const now = new Date();
-    const statusText = now > expiryDate ? `${e("INACTIVE", "🔴")} <b>Expired</b>` : `${e("ACTIVE", "🟢")} <b>Active</b>`;
 
-    const detailMsg = 
-      `${e("STOCK", "📦")} <b>Order Details (#${order.id})</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-      `<blockquote>• <b>Plan:</b> ${pkgInfo.name || order.category.toUpperCase()}\n• <b>Price:</b> ${order.price.toLocaleString()} MMK\n• <b>Purchased:</b> ${MSG.formatMyanmarTime(buyDate)}\n• <b>Expires:</b> ${MSG.formatMyanmarTime(expiryDate)}\n• <b>Status:</b> ${statusText}</blockquote>\n\n` +
-      `<code>${order.access_key}</code>`;
+    let statusText = "";
+    if (now.getTime() > expiryDate.getTime()) {
+      statusText = `${e("INACTIVE", "🔴")} <b>Expired</b>`;
+    } else {
+      const diffMs = expiryDate.getTime() - now.getTime();
+      const leftDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const leftHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      statusText = `${e("ACTIVE", "🟢")} <b>Active (${leftDays}d ${leftHours}h remaining)</b>`;
+    }
 
+    const detailMsg = MSG.getOrderDetailMessage(order, pkgInfo, buyDate, expiryDate, statusText);
     await editMsg(detailMsg, KB.getKeyDetailKeyboard(order.id, returnPage, order.access_key));
     return;
   }
@@ -886,49 +927,7 @@ async function handleCallback(cb, env) {
 
   // Terms & Topup
   if (data === "menu_terms") {
-    await editMsg(
-    `${e("TERMS", "📜")} <b>Terms of Service & Store Policies</b>\n` +
-    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `Please review our store policies before depositing funds or purchasing keys:\n\n` +
-
-    `<b>1. Payment & Transfer Rules:</b>\n` +
-    `<blockquote>` +
-    `• Supported Methods: <b>KBZPay, WavePay</b>.\n` +
-    `• <b>Strict Transfer Rule:</b> Keep the payment remark/note <b>COMPLETELY BLANK</b>. Do not write "VPN", "Outline", "Key", or bot names.\n` +
-    `• Submit clear, unedited payment screenshots/slips only.\n` +
-    `• Transactions are manually verified by admins within <b>5 minutes to 24 hours</b>.` +
-    `</blockquote>\n\n` +
-
-    `<b>2. Strict No-Refund Policy:</b>\n` +
-    `<blockquote>` +
-    `• All balance top-ups, direct key purchases, and digital orders are <b>final and non-refundable</b> once processed.` +
-    `</blockquote>\n\n` +
-
-    `<b>3. Zero Tolerance for Fraud:</b>\n` +
-    `<blockquote>` +
-    `• Uploading forged, edited, reused, or fake transfer slips will lead to an <b>immediate and permanent account ban</b> without warning.` +
-    `</blockquote>\n\n` +
-
-    `<b>4. Fair Usage & Device Limits:</b>\n` +
-    `<blockquote>` +
-    `• <b>Device Limits:</b> Please strictly adhere to your plan's device limit (1 User / 2 Users / Unlimited Devices).\n` +
-    `• Keys are intended strictly for personal browsing, gaming, and secure communications.\n` +
-    `• Public key sharing, illegal cyber activities, DDoS, and torrent abuse that harm server stability are strictly prohibited.` +
-    `</blockquote>\n\n` +
-
-    `<b>5. Service Maintenance:</b>\n` +
-    `<blockquote>` +
-    `• Nodes and servers are actively monitored. In case of ISP blocks or network downtime, our team works to restore nodes as promptly as possible.` +
-    `</blockquote>\n\n` +
-
-    `<b>6. Final Authority:</b>\n` +
-    `<blockquote>` +
-    `• In case of any dispute or ambiguous transactions, the final decision rests solely with the Store Admin Team.` +
-    `</blockquote>\n\n` +
-    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n` +
-    `${e("WARNING", "⚠️")} <i>By depositing funds or making a purchase, you acknowledge and agree to comply with all store policies listed above.</i>`
-  );
-
+    await editMsg(`${e("TERMS", "📜")} <b>Terms of Service & Usage Policies</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n• All wallet top-ups and key sales are non-refundable.\n• Leaving transfer notes with words like "VPN", "Outline" is strictly prohibited.\n• Fraudulent transaction slips will result in an immediate permanent ban.`, { inline_keyboard: [[makeBtn("Main Menu", "callback_data", "menu_home", null, "BTN_HOME")]] });
     return;
   }
 
@@ -982,7 +981,7 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // --- PAY DIRECT: Plan Key ကို pending_plan_key တွင် မှတ်သားပေးခြင်း ---
+  // Pay Direct
   if (data.startsWith("pay_direct_")) {
     const pkgKey = data.replace("pay_direct_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
@@ -997,7 +996,7 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // --- BUY WITH WALLET ---
+  // Buy with Wallet
   if (data.startsWith("buy_wallet_")) {
     const pkgKey = data.replace("buy_wallet_", "");
     const pkg = CONFIG.PACKAGES[pkgKey];
@@ -1069,14 +1068,22 @@ async function handleCallback(cb, env) {
     return;
   }
 
-  // --- FREE TEST KEY ---
+  // --- FREE TEST KEY (ပုံ ၃ & ပုံ ၄ အတိုင်း ပြင်ဆင်ချက်) ---
   if (data === "menu_test" || data === "menu_test_key_info") {
     const existingTest = await env.DB.prepare("SELECT * FROM orders WHERE user_id = ? AND category = 'test' ORDER BY created_at DESC LIMIT 1").bind(userId).first();
     if (existingTest) {
       const claimedDate = parseDbDate(existingTest.created_at);
       const nextAvailDate = new Date(claimedDate.getTime() + (30 * 24 * 60 * 60 * 1000));
-      if (new Date().getTime() < nextAvailDate.getTime()) {
-        await editMsg(`${e("WARNING", "⚠️")} <b>Test Key Already Claimed!</b>\n\nYou can claim another test key after 30 days cooldown.`, {
+      const now = new Date();
+
+      if (now.getTime() < nextAvailDate.getTime()) {
+        const diffMs = nextAvailDate.getTime() - now.getTime();
+        const daysLeft = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        const hoursLeft = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+        // ပုံ ၃ အတိုင်း UI တည်ဆောက်ခြင်း
+        const claimedMsg = MSG.getTestKeyClaimedMessage(claimedDate, nextAvailDate, daysLeft, hoursLeft);
+        await editMsg(claimedMsg, {
           inline_keyboard: [
             [makeBtn("View My Test Key", "callback_data", "view_claimed_test_key", null, "BTN_KEY")],
             [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
@@ -1090,6 +1097,28 @@ async function handleCallback(cb, env) {
   }
 
   if (data === "exec_claim_test_key" || data === "claim_free_test") {
+    const existingTest = await env.DB.prepare("SELECT * FROM orders WHERE user_id = ? AND category = 'test' ORDER BY created_at DESC LIMIT 1").bind(userId).first();
+    if (existingTest) {
+      const claimedDate = parseDbDate(existingTest.created_at);
+      const nextAvailDate = new Date(claimedDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+      const now = new Date();
+
+      if (now.getTime() < nextAvailDate.getTime()) {
+        const diffMs = nextAvailDate.getTime() - now.getTime();
+        const daysLeft = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        const hoursLeft = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+
+        const claimedMsg = MSG.getTestKeyClaimedMessage(claimedDate, nextAvailDate, daysLeft, hoursLeft);
+        await editMsg(claimedMsg, {
+          inline_keyboard: [
+            [makeBtn("View My Test Key", "callback_data", "view_claimed_test_key", null, "BTN_KEY")],
+            [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
+          ]
+        });
+        return;
+      }
+    }
+
     const testKeyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = 'test' LIMIT 1").first();
     if (!testKeyItem) {
       await editMsg(`${e("UNSTOCK", "😔")} <b>Out of Stock!</b>\n\nNo free test keys currently available.`, {
@@ -1097,19 +1126,26 @@ async function handleCallback(cb, env) {
       });
       return;
     }
+
     await env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(testKeyItem.id).run();
     await env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, 'test', ?, 0)").bind(userId, testKeyItem.access_key).run();
 
+    // ပုံ ၄ အတိုင်း Claim ပြီးလျှင် Active Free Test Key ပြသခြင်း
     await editMsg(
-      `${e("SUCCESS", "🎉")} <b>Your Free Test Key is Ready!</b>\n\n<code>${testKeyItem.access_key}</code>`,
+      MSG.getActiveTestKeyMessage(testKeyItem.access_key),
       KB.getTestKeyActionKeyboard(testKeyItem.access_key)
     );
     return;
   }
 
+  // ပုံ ၄ အတိုင်း View My Test Key နှိပ်သည့်အခါ ပြသမည့် Handling
   if (data === "view_claimed_test_key") {
     const existingTest = await env.DB.prepare("SELECT access_key FROM orders WHERE user_id = ? AND category = 'test' ORDER BY created_at DESC LIMIT 1").bind(userId).first();
-    await editMsg(`${e("KEY", "🔑")} <b>My Active Free Test Key</b>\n\n<code>${existingTest?.access_key || "None"}</code>`, KB.getTestKeyActionKeyboard(existingTest?.access_key));
+    const keyStr = existingTest?.access_key || "No key found";
+    await editMsg(
+      MSG.getActiveTestKeyMessage(keyStr),
+      KB.getTestKeyActionKeyboard(keyStr)
+    );
     return;
   }
 }

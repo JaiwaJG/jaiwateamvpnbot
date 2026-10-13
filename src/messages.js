@@ -7,6 +7,7 @@ export function maskName(name) {
   return str.slice(0, 2) + "*".repeat(Math.max(1, str.length - 2));
 }
 
+// 12-hour format with AM/PM (e.g. 11 Oct 2026, 02:53 am)
 export function formatMyanmarTime(dateObj) {
   try {
     return new Intl.DateTimeFormat("en-GB", {
@@ -37,28 +38,26 @@ export function getWelcomeMessage(firstName) {
     `${e("STAR", "✨")} <b>Referral</b> — Invite friends & earn 5%\n` +
     `${e("TERMS", "📜")} <b>Terms</b> — Store rules & usage policies` +
     `</blockquote>\n\n` +
-    `${e("BUY", "👑")} <b>Sale Proved: @saleproved</b>\n\n` +
+    `${e("BUY", "👑")} <b>Sale Proved: @salesproved</b>\n\n` +
     `<b>Select an option below to continue.</b> ${e("DOWN", "👇")}`
   );
 }
 
-// Category Selection Message (English)
 export function getCategorySelectMessage() {
   return (
     `${e("SHOP", "🛍")} <b>Select Package Category</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
     `Please choose your desired key package category:\n\n` +
     `<blockquote>` +
-    `1 <b>Limited Data | Unlimited Users</b>\n` +
+    `1️⃣ <b>Limited Data | Unlimited Users</b>\n` +
     `• High-speed data quota with unlimited simultaneous device connections.\n\n` +
-    `2 <b>Unlimited Data | Limited Users</b>\n` +
+    `2️⃣ <b>Unlimited Data | Limited Users</b>\n` +
     `• 100% Unlimited high-speed data with dedicated device quota.` +
     `</blockquote>\n\n` +
     `${e("DOWN", "👇")} <i>Choose a category below to continue:</i>`
   );
 }
 
-// Category Package List Message (English)
 export function getPackageListMessage(balance, categoryType, stockMap = {}) {
   const isLimited = categoryType === "limited_data";
   const title = isLimited ? "Limited Data | Unlimited Users" : "Unlimited Data | Limited Users";
@@ -89,7 +88,6 @@ export function getPackageListMessage(balance, categoryType, stockMap = {}) {
   );
 }
 
-// Plan Detail Message (English)
 export function getPlanDetailMessage(pkgKey, balance, inStock = true) {
   const pkg = CONFIG.PACKAGES[pkgKey];
   return (
@@ -108,7 +106,6 @@ export function getPlanDetailMessage(pkgKey, balance, inStock = true) {
   );
 }
 
-// Insufficient Wallet Balance Message (English)
 export function getInsufficientBalanceMessage(price, balance) {
   return (
     `${e("UNSTOCK", "😔")} <b>Insufficient Wallet Balance!</b>\n` +
@@ -173,18 +170,48 @@ export function getChannelSaleMessage(buyerName, category, price, accessKey) {
   );
 }
 
-export function getTestKeyInfoMessage() {
+// ပုံ ၂ အတိုင်း Key Detail View Message
+export function getOrderDetailMessage(order, pkgInfo, buyDate, expiryDate, statusText) {
   return (
-    `${e("FREEBIES", "🎁")} <b>Free Outline Test Key</b>\n` +
+    `${e("STOCK", "📦")} <b>Order Details (#${order.id})</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `Claim an exclusive free test key to experience our high-speed network.\n\n` +
     `<blockquote>` +
-    `${e("PIN", "📌")} <b>Freebie Terms:</b>\n` +
-    `• Each user can claim <b>1 free test key every 30 days</b>.\n` +
-    `• For individual use only; do not re-distribute.\n` +
-    `• The claimed key is saved in your Profile.` +
+    `• ${e("STAR", "✨")} <b>Plan:</b> ${pkgInfo.name || pkgInfo.gb || order.category.toUpperCase()}\n` +
+    `• ${e("BALANCE", "💎")} <b>Price:</b> ${order.price.toLocaleString()} MMK\n` +
+    `• ${e("DATE", "📅")} <b>Purchased:</b> ${formatMyanmarTime(buyDate)}\n` +
+    `• ${e("CLOCK", "⏳")} <b>Expires:</b> ${formatMyanmarTime(expiryDate)}\n` +
+    `• ${e("STATUS", "📊")} <b>Status:</b> ${statusText}` +
     `</blockquote>\n\n` +
-    `Tap the button below to claim your key now. ${e("DOWN", "👇")}`
+    `${e("KEY", "🔑")} <b>Outline Access Key:</b>\n` +
+    `<blockquote>` +
+    `<code>${order.access_key}</code>` +
+    `</blockquote>\n\n` +
+    `${e("DOWN", "👇")} <i>Tap the copy button below or tap the code to copy ${e("KEY", "🔑")} Key.</i>`
+  );
+}
+
+// ပုံ ၃ အတိုင်း Test Key Cooldown Message
+export function getTestKeyClaimedMessage(claimedDate, nextAvailDate, daysLeft, hoursLeft) {
+  return (
+    `⚠️ <b>Test Key Already Claimed!</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `<blockquote>` +
+    `• ${e("DATE", "📅")} <b>Claimed On:</b> ${formatMyanmarTime(claimedDate)}\n` +
+    `• ${e("CLOCK", "⏳")} <b>Next Available:</b> ${formatMyanmarTime(nextAvailDate)}` +
+    `</blockquote>\n\n` +
+    `<i>You can claim another test key in <b>${daysLeft} days and ${hoursLeft} hours</b>.</i>`
+  );
+}
+
+// ပုံ ၄ အတိုင်း Active Free Test Key Viewer Message
+export function getActiveTestKeyMessage(keyStr) {
+  return (
+    `${e("KEY", "🔑")} <b>My Active Free Test Key</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `<blockquote>` +
+    `<code>${keyStr}</code>` +
+    `</blockquote>\n\n` +
+    `${e("DOWN", "👇")} <i>Tap the copy button below or tap the code to copy ${e("KEY", "🔑")} Test Key.</i>`
   );
 }
 
@@ -219,17 +246,18 @@ export function getExpiryReminderMessage(buyerName, category, accessKey, daysLef
   );
 }
 
+// Test Key Expired Notification Message
 export function getTestKeyExpiredMessage(buyerName) {
   return (
-    `${e("FREEBIES", "🎁")} <b>Trial Period Ended</b>\n` +
+    `${e("FREEBIES", "🎁")} <b>Free Trial Period Ended!</b>\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
-    `Hello <b>${buyerName}</b>${e("STAR", "✨")},\n` +
-    `Your Outline VPN <b>Free Trial Key</b> has expired and has been automatically removed.\n\n` +
+    `Hello <b>${buyerName}</b> ${e("STAR", "✨")},\n` +
+    `Your Outline VPN <b>Free Trial Key</b> has expired.\n\n` +
     `<blockquote>` +
     `• <b>Status:</b> Expired & Cleared\n` +
-    `• <b>Action:</b> You are now eligible to claim a new key or upgrade to a Private Key Plan.` +
+    `• <b>Action:</b> You can now claim a fresh test key or upgrade to an unlimited private plan.` +
     `</blockquote>\n\n` +
-    `<i>Tap the button below to get your new Free Trial Key.</i>`
+    `<i>Tap the button below to claim a new trial key:</i>`
   );
 }
 
@@ -309,4 +337,59 @@ export function getOrdersSummaryMessage(totalOrders, totalSpent) {
   `• ${e("BALANCE", "💰")} Total Spent: <b>${totalSpent.toLocaleString()} MMK</b>\n` + 
   `</blockquote>\n\n` + 
   `${noteText}`; 
+}
+
+// ပုံ ၁ အတိုင်း Store Analytics Executive Report
+export function formatStoreAnalyticsReport(data) {
+  const {
+    todayRev, todayOrders,
+    yestRev, yestOrders,
+    monthRev, monthOrders,
+    totalRev, totalOrders,
+    pkgBreakdownText,
+    totalRef,
+    totalUsers, activeUsers, bannedUsers,
+    stockMap,
+    pendingAudit,
+    nowStr
+  } = data;
+
+  const fmt = (n) => Number(n || 0).toLocaleString();
+
+  let stockLines = "";
+  for (const [k, pkg] of Object.entries(CONFIG.PACKAGES)) {
+    const qty = stockMap[k] || 0;
+    const warn = qty <= 2 ? " ⚠️" : "";
+    stockLines += `• <b>${pkg.name}:</b> ${fmt(qty)} Available${warn}\n`;
+  }
+  stockLines += `• <b>Free Test Keys:</b> ${fmt(stockMap["test"] || 0)} Available`;
+
+  return (
+    `<b>${CONFIG.STORE_NAME}</b>\n` +
+    `${e("STATUS", "📊")} <b>Store Analytics & Executive Report</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `${e("BALANCE", "💎")} <b>Revenue & Cash Flow</b>\n` +
+    `<blockquote>` +
+    `• <b>Today:</b> ${fmt(todayRev)} MMK (${fmt(todayOrders)} Orders)\n` +
+    `• <b>Yesterday:</b> ${fmt(yestRev)} MMK (${fmt(yestOrders)} Orders)\n` +
+    `• <b>This Month:</b> ${fmt(monthRev)} MMK (${fmt(monthOrders)} Orders)\n` +
+    `• <b>All-Time Revenue:</b> ${fmt(totalRev)} MMK\n` +
+    `• <b>Total Completed Sales:</b> ${fmt(totalOrders)}` +
+    `</blockquote>\n\n` +
+    `${e("STOCK", "📦")} <b>Package Performance (Sales)</b>\n` +
+    `<blockquote>${pkgBreakdownText}</blockquote>\n\n` +
+    `${e("STAR", "✨")} <b>Affiliate / Referral Stats</b>\n` +
+    `<blockquote>• <b>Total Commission:</b> ${fmt(totalRef)} MMK</blockquote>\n\n` +
+    `${e("STOCK", "📦")} <b>Key Inventory (Stock)</b>\n` +
+    `<blockquote>${stockLines}</blockquote>\n\n` +
+    `${e("USERS", "👥")} <b>Users & Security</b>\n` +
+    `<blockquote>` +
+    `• <b>Total Registered:</b> ${fmt(totalUsers)}\n` +
+    `• <b>Active Key Users:</b> ${fmt(activeUsers)}\n` +
+    `• <b>Suspended/Banned:</b> ${fmt(bannedUsers)}` +
+    `</blockquote>\n\n` +
+    `${e("CLOCK", "⏳")} <b>Audit Queue:</b> ${fmt(pendingAudit)} Pending Slips\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n` +
+    `${e("BTN_REFRESH", "🔄")} <i>Last updated: ${nowStr}</i>`
+  );
 }

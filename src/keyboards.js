@@ -1,6 +1,5 @@
 import { CONFIG, makeBtn } from "./config.js";
 
-// Main Store Menu
 export function getMainKeyboard() {
   return {
     inline_keyboard: [
@@ -19,7 +18,6 @@ export function getMainKeyboard() {
   };
 }
 
-// 1. Category Selection Keyboard
 export function getCategoryKeyboard() {
   return {
     inline_keyboard: [
@@ -30,7 +28,6 @@ export function getCategoryKeyboard() {
   };
 }
 
-// 2. Category Packages Keyboard with Dynamic Stock Check (Out of Stock => Red Style + ❌)
 export function getCategoryPackagesKeyboard(categoryType, stockMap = {}) {
   const rows = [];
   const pkgs = Object.entries(CONFIG.PACKAGES).filter(([k, v]) => v.category_type === categoryType);
@@ -42,7 +39,6 @@ export function getCategoryPackagesKeyboard(categoryType, stockMap = {}) {
         makeBtn(`${pkg.name} — ${pkg.price.toLocaleString()} MMK`, "callback_data", `detail_pkg_${key}`, "primary", "BTN_SHOP")
       ]);
     } else {
-      // Stock Out State
       rows.push([
         makeBtn(`${pkg.name} — Out of Stock`, "callback_data", `out_of_stock_${key}`, "danger", "FALSE")
       ]);
@@ -53,7 +49,6 @@ export function getCategoryPackagesKeyboard(categoryType, stockMap = {}) {
   return { inline_keyboard: rows };
 }
 
-// 3. Plan Detail Payment Method Selection
 export function getPlanPaymentMethodKeyboard(categoryKey, categoryType) {
   return {
     inline_keyboard: [
@@ -64,7 +59,6 @@ export function getPlanPaymentMethodKeyboard(categoryKey, categoryType) {
   };
 }
 
-// 4. Insufficient Balance Keyboard
 export function getInsufficientBalanceKeyboard(categoryType) {
   return {
     inline_keyboard: [
@@ -74,7 +68,6 @@ export function getInsufficientBalanceKeyboard(categoryType) {
   };
 }
 
-// Deposit Selection
 export function getTopupKeyboard() {
   return {
     inline_keyboard: [
@@ -121,6 +114,7 @@ export function getProfileOrdersKeyboard(orders, page, totalPages) {
   return { inline_keyboard: inlineKeyboard };
 }
 
+// ပုံ ၂ အတိုင်း Copy Key, Delete Key, Back to Orders ခလုတ်များ
 export function getKeyDetailKeyboard(orderId, page, accessKey) {
   const safeKey = accessKey || "No-Key-Found";
   return {
@@ -169,6 +163,7 @@ export function getStockRefreshKeyboard() {
   };
 }
 
+// ပုံ ၄ အတိုင်း Copy Test Key, Back to Home ခလုတ်များ
 export function getTestKeyActionKeyboard(accessKey) {
   const safeKey = accessKey || "No-Key-Found";
   return {
@@ -179,10 +174,11 @@ export function getTestKeyActionKeyboard(accessKey) {
   };
 }
 
+// ပုံ ၁ အောက်ခြေရှိ Refresh Status ခလုတ်
 export function getStatsRefreshKeyboard() {
   return {
     inline_keyboard: [
-      [makeBtn("Refresh Stats", "callback_data", "admin_refresh_stats", "primary", "BTN_REFRESH")]
+      [makeBtn("Refresh Status", "callback_data", "admin_refresh_stats", "primary", "BTN_REFRESH")]
     ]
   };
 }
