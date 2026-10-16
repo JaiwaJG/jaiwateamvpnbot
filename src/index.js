@@ -808,7 +808,7 @@ async function handleCallback(cb, env) {
     stockMsg += `• ${e("FREEBIES", "🎁")} Free Test Keys: <b>${stockMap["test"] || 0}</b> keys\n`;
 
     await editMsg(stockMsg, KB.getStockRefreshKeyboard());
-    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `${e("BTN_REFRESH", "🔄")} Stock Refreshed!` });
+    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: `${e("BTN_REFRESH", "🔄")} Stock Refreshed!`});
     return;
   }
 
@@ -915,7 +915,9 @@ async function handleCallback(cb, env) {
 
   if (data.startsWith("del_conf_")) {
     const [, , orderId, returnPage] = data.split("_");
-    await editMsg(`${e("WARNING", "⚠️")} Are you sure you want to delete Key (#${orderId})?`, KB.getDeleteConfirmKeyboard(orderId, returnPage));
+    await editMsg
+    (`${e("WARNING", "⚠️")} Are you sure you want to delete Key (#${orderId})?\n\n` +
+    `<b>This action can't be undo and your key (#${orderId}) would be parmermently delete.</b>`, KB.getDeleteConfirmKeyboard(orderId, returnPage));
     return;
   }
 
