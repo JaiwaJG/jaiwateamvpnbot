@@ -4,7 +4,8 @@ export function getMainKeyboard() {
   return {
     inline_keyboard: [
       [makeBtn("Buy Outline Key", "callback_data", "menu_buy", "success", "BTN_SHOP")],
-      [makeBtn("Free Test Key", "callback_data", "menu_test", null, "BTN_FREEBIES")],
+      [makeBtn("Free Test Key", "callback_data", "menu_test", null, "KEY"),
+      makeBtn("Giveaway", "callback_data", "menu_giftway", "danger", "BTN_FREEBIES")],
       [
         makeBtn("Deposit", "callback_data", "menu_topup", null, "BTN_DEPOSIT"),
         makeBtn("My Profile", "callback_data", "menu_profile", null, "BTN_PROFILE")        
@@ -216,6 +217,97 @@ export function getSupportKeyboard() {
         makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME"),
         makeBtn("Contact Support", "url", `https://t.me/JaiwaJG`, null, "BTN_SUPPORT")
       ]
+    ]
+  };
+}
+// --- Giveaway keyboards (added for /giftway; existing keyboards untouched) ---
+export function getGiveawayKeyboard(giveawayId) {
+  return {
+    inline_keyboard: [
+      [makeBtn("Join Giveaway", "url", `https://t.me/${CONFIG.BOT_USERNAME}?start=menu_giftway`, "success", "BTN_FREEBIES")]
+    ]
+  };
+}
+
+export function getGiveawayPrizeKeyboard() {
+  return {
+    inline_keyboard: [
+      [makeBtn("Wallet Balance", "callback_data", "gw_prize_balance", "primary", "WALLET")],
+      [makeBtn("VPN Package Key", "callback_data", "gw_prize_package", "primary", "BTN_SHOP")],
+      [makeBtn("Free Test Key", "callback_data", "gw_prize_test", null, "BTN_FREEBIES")],
+      [makeBtn("Custom Prize", "callback_data", "gw_prize_custom", null, "BTN_CUSTOM")]
+    ]
+  };
+}
+
+export function getGiveawayPackageKeyboard() {
+  const rows = [];
+  for (const [key, pkg] of Object.entries(CONFIG.PACKAGES)) {
+    rows.push([makeBtn(`${pkg.name} — ${pkg.price.toLocaleString()} MMK`, "callback_data", `gw_pkg_${key}`, "primary", "BTN_SHOP")]);
+  }
+  return { inline_keyboard: rows };
+}
+
+export function getGiveawayConfirmKeyboard() {
+  return {
+    inline_keyboard: [
+      [makeBtn("Confirm & Start Giveaway", "callback_data", "gw_create_confirm", "success", "BTN_APPROVE")],
+      [makeBtn("Cancel", "callback_data", "gw_draft_cancel", "danger", "BTN_REJECT")]
+    ]
+  };
+}
+
+export function getGiveawayAdminKeyboard(giveawayId) {
+  return {
+    inline_keyboard: [
+      [makeBtn("End Now & Draw Winners", "callback_data", `gw_end_${giveawayId}`, "success", "BTN_APPROVE")],
+      [makeBtn("Participants", "callback_data", `gw_participants_${giveawayId}`, "primary", "USERS")],
+      [makeBtn("Cancel Giveaway", "callback_data", `gw_giveaway_cancel_${giveawayId}`, "danger", "BTN_REJECT")]
+    ]
+  };
+}
+
+export function getAnnounceConfirmKeyboard(pendingId) {
+  return {
+    inline_keyboard: [
+      [makeBtn("Confirm & Send", "callback_data", `announce_confirm_${pendingId}`, "success", "BTN_APPROVE")],
+      [makeBtn("Cancel", "callback_data", `announce_cancel_${pendingId}`, "danger", "BTN_REJECT")]
+    ]
+  };
+}
+
+export function getGiveawayUserKeyboard(giveawayId) {
+  return {
+    inline_keyboard: [
+      [makeBtn("Join Giveaway", "callback_data", `gw_join_${giveawayId}`, "success", "BTN_FREEBIES")],
+      [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
+    ]
+  };
+}
+
+export function getGiveawayUnavailableKeyboard() {
+  return {
+    inline_keyboard: [
+      [makeBtn("Back to Home", "callback_data", "menu_home", null, "BTN_HOME")]
+    ]
+  };
+}
+
+export function getGiveawayActiveChoiceKeyboard() {
+  return {
+    inline_keyboard: [
+      [makeBtn("Replace Now", "callback_data", "gw_active_replace", "danger", "BTN_REJECT")],
+      [makeBtn("Schedule for Later", "callback_data", "gw_active_schedule", "primary", "CLOCK")],
+      [makeBtn("Cancel", "callback_data", "gw_active_cancel", null, "BTN_BACK")]
+    ]
+  };
+}
+
+export function getGiveawayScheduleConfirmKeyboard() {
+  return {
+    inline_keyboard: [
+      [makeBtn("Confirm & Set Date", "callback_data", "gw_create_confirm", "success", "BTN_APPROVE")],
+      [makeBtn("Cancel", "callback_data", "gw_draft_cancel", "danger", "BTN_REJECT")]
     ]
   };
 }

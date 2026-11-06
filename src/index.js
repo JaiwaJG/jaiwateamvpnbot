@@ -27,6 +27,16 @@ export default {
     try {
       const now = new Date();
 
+      // Scheduled giveaways due now are posted first (v3), then expired ones end.
+      await checkAndPostScheduledGiveaways(env);
+      // Giveaway auto-ending (added; existing cron jobs below are untouched)
+      try {
+        await ensureGiveawayTables(env);
+        const activeGifts = await env.DB.prepare("SELECT * FROM giveaways WHERE status = 'active' AND ends_at <= ?").bind(now.getTime()).all();
+        for (const g of activeGifts.results || []) await endGiveaway(env, g);
+      } catch (e) {}
+
+
       // 1. Expired Free Test Keys Notification to User
       const expiredTests = await env.DB.prepare(`
         SELECT orders.*, users.first_name 
@@ -130,6 +140,236 @@ async function tgJson(env, method, payload) {
   } catch (e) {
     return null;
   }
+}
+
+
+// --- Giveaway / announce helpers (added; no existing helper changed) ---
+async function ensureGiveawayTables(env) {
+  try {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, prize_type TEXT, prize_value TEXT, winners_count INTEGER, max_participants INTEGER, duration_hours INTEGER, ends_at INTEGER, status TEXT DEFAULT 'active', message_chat_id TEXT, message_id INTEGER, created_by INTEGER, created_at TEXT, custom_message TEXT)").run();
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS giveaway_entries (giveaway_id INTEGER, user_id INTEGER, PRIMARY KEY (giveaway_id, user_id))").run();
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS giveaway_drafts (admin_id INTEGER, group_id TEXT, step TEXT, title TEXT, prize_type TEXT, prize_value TEXT, winners_count INTEGER, max_participants INTEGER, duration_hours INTEGER, custom_message TEXT, prompt_message_id INTEGER, PRIMARY KEY (admin_id, group_id))").run();
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS pending_announcements (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, group_id TEXT, text TEXT, created_at TEXT)").run();
+    try { await env.DB.prepare("ALTER TABLE giveaways ADD COLUMN custom_message TEXT").run(); } catch (e) {}
+    try { await env.DB.prepare("ALTER TABLE giveaway_drafts ADD COLUMN custom_message TEXT").run(); } catch (e) {}
+    try { await env.DB.prepare("ALTER TABLE giveaway_drafts ADD COLUMN prompt_message_id INTEGER").run(); } catch (e) {}
+    try { await env.DB.prepare("ALTER TABLE giveaway_drafts ADD COLUMN schedule_mode INTEGER DEFAULT 0").run(); } catch (e) {}
+    try { await env.DB.prepare("ALTER TABLE giveaway_drafts ADD COLUMN scheduled_at INTEGER").run(); } catch (e) {}
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS scheduled_giveaways (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, custom_message TEXT, prize_type TEXT, prize_value TEXT, winners_count INTEGER, max_participants INTEGER, duration_hours INTEGER, scheduled_at INTEGER, group_id TEXT, created_by INTEGER, created_at TEXT, status TEXT DEFAULT 'scheduled')").run();
+  } catch (e) {}
+}
+
+async function getLatestActiveGiveaway(env) {
+  try { return await env.DB.prepare("SELECT * FROM giveaways WHERE status = 'active' ORDER BY id DESC LIMIT 1").first(); } catch (e) { return null; }
+}
+
+// --- v3 helpers: Yangon date parsing, main-channel posting, scheduled posting ---
+// Parse "5 Nov 2026, 10:00 am", "2026-11-05 10:00" or "05/11/2026 10:00" as Asia/Yangon time.
+// Returns epoch ms, or null if invalid. Yangon is UTC+6:30, with no daylight saving.
+function parseYangonDateTime(text) {
+  const s = String(text || "").trim();
+  const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  let m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\s*,?\s+(\d{1,2}):(\d{2})\s*([aApP][mM])?$/);
+  let year, month, day, hour, minute;
+  if (m) {
+    day = parseInt(m[1], 10); month = months[m[2].toLowerCase().slice(0, 3)]; year = parseInt(m[3], 10);
+    hour = parseInt(m[4], 10); minute = parseInt(m[5], 10);
+    if (month === undefined) return null;
+    if (m[6]) { const ap = m[6].toLowerCase(); if (ap === "pm" && hour < 12) hour += 12; if (ap === "am" && hour === 12) hour = 0; }
+  } else if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$/))) {
+    year = parseInt(m[1], 10); month = parseInt(m[2], 10) - 1; day = parseInt(m[3], 10); hour = parseInt(m[4], 10); minute = parseInt(m[5], 10);
+  } else if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/))) {
+    day = parseInt(m[1], 10); month = parseInt(m[2], 10) - 1; year = parseInt(m[3], 10); hour = parseInt(m[4], 10); minute = parseInt(m[5], 10);
+  } else return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || month < 0 || month > 11 || day < 1 || day > 31) return null;
+  const utcMs = Date.UTC(year, month, day, hour, minute) - (6 * 60 + 30) * 60 * 1000;
+  const check = new Date(utcMs + (6 * 60 + 30) * 60 * 1000);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month || check.getUTCDate() !== day) return null;
+  return utcMs;
+}
+
+async function replaceOldActiveGiveaways(env, paymentGroupId, excludeId) {
+  const oldGifts = await env.DB.prepare("SELECT * FROM giveaways WHERE status = 'active' AND id != ?").bind(excludeId).all();
+  for (const oldGift of oldGifts.results || []) {
+    await env.DB.prepare("UPDATE giveaways SET status = 'cancelled' WHERE id = ?").bind(oldGift.id).run();
+    if (oldGift.message_chat_id && oldGift.message_id) {
+      try { await tg(env, "deleteMessage", { chat_id: oldGift.message_chat_id, message_id: oldGift.message_id }); } catch (e) {}
+    }
+  }
+  if (oldGifts.results?.length && paymentGroupId) {
+    await tg(env, "sendMessage", { chat_id: paymentGroupId, text: `${e("WARNING", "⚠️")} Previous active giveaway(s) replaced: ${oldGifts.results.map((g) => `#${g.id}`).join(", ")}`, parse_mode: "HTML" });
+  }
+  return oldGifts.results || [];
+}
+
+// Create an active giveaway and post it to the main channel only (v3).
+// If the main-channel post fails, it is NOT silently posted to the payment
+// group as a public post; the payment group gets an explicit failure notice
+// instead, so a missing post is visible. The admin message is always sent.
+async function createAndPostGiveaway(env, data, paymentGroupId) {
+  const endsAt = Date.now() + Number(data.duration_hours || 24) * 60 * 60 * 1000;
+  const res = await env.DB.prepare("INSERT INTO giveaways (title, custom_message, prize_type, prize_value, winners_count, max_participants, duration_hours, ends_at, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)").bind(data.title, data.custom_message, data.prize_type, data.prize_value, data.winners_count, data.max_participants, data.duration_hours, endsAt, data.created_by, new Date().toISOString()).run();
+  const giftId = res.meta?.last_row_id;
+  if (!giftId) return null;
+  const gift = { id: giftId, title: data.title, custom_message: data.custom_message, prize_type: data.prize_type, prize_value: data.prize_value, winners_count: data.winners_count, max_participants: data.max_participants, duration_hours: data.duration_hours, ends_at: endsAt, status: "active" };
+  await replaceOldActiveGiveaways(env, paymentGroupId, giftId);
+  const mainChannelId = String(CONFIG.GIVEAWAY?.CHANNEL_ID || CONFIG.FORCE_JOIN?.CHANNEL_ID || "").trim();
+  let posted = null;
+  if (mainChannelId) {
+    posted = await tgJson(env, "sendMessage", { chat_id: mainChannelId, text: MSG.getGiveawayMessage(gift, 0), parse_mode: "HTML", reply_markup: KB.getGiveawayKeyboard(giftId) });
+  }
+  if (posted?.ok && posted.result?.message_id) {
+    await env.DB.prepare("UPDATE giveaways SET message_chat_id = ?, message_id = ? WHERE id = ?").bind(String(mainChannelId), posted.result.message_id, giftId).run();
+  } else if (paymentGroupId) {
+    await tg(env, "sendMessage", { chat_id: paymentGroupId, text: `${e("WARNING", "⚠️")} <b>Giveaway #${giftId} created, but the main-channel post failed.</b>\n\nCheck that the bot is an admin in the main channel with Post Messages permission. The giveaway is still active in the bot, but no channel post was made.`, parse_mode: "HTML" });
+  }
+  if (paymentGroupId) {
+    await tg(env, "sendMessage", { chat_id: paymentGroupId, text: MSG.getGiveawayAdminMessage(gift, 0), parse_mode: "HTML", reply_markup: KB.getGiveawayAdminKeyboard(giftId) });
+  }
+  return gift;
+}
+
+async function checkAndPostScheduledGiveaways(env) {
+  try {
+    await ensureGiveawayTables(env);
+    const now = Date.now();
+    const due = await env.DB.prepare("SELECT * FROM scheduled_giveaways WHERE status = 'scheduled' AND scheduled_at <= ? ORDER BY scheduled_at ASC").bind(now).all();
+    for (const s of due.results || []) {
+      await env.DB.prepare("UPDATE scheduled_giveaways SET status = 'posting' WHERE id = ?").bind(s.id).run();
+      const gift = await createAndPostGiveaway(env, { title: s.title, custom_message: s.custom_message, prize_type: s.prize_type, prize_value: s.prize_value, winners_count: s.winners_count, max_participants: s.max_participants, duration_hours: s.duration_hours, created_by: s.created_by }, s.group_id);
+      await env.DB.prepare("UPDATE scheduled_giveaways SET status = ? WHERE id = ?").bind(gift ? "posted" : "failed", s.id).run();
+    }
+  } catch (e) {}
+}
+
+async function updateWizardPrompt(env, chatId, draft, text, replyMarkup) {
+  let newId = draft.prompt_message_id || null;
+  if (newId) {
+    const edited = await tgJson(env, "editMessageText", { chat_id: chatId, message_id: newId, text, parse_mode: "HTML", reply_markup: replyMarkup });
+    if (edited?.ok) return newId;
+  }
+  const sent = await tgJson(env, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", reply_markup: replyMarkup });
+  if (sent?.ok && sent.result?.message_id) newId = sent.result.message_id;
+  return newId;
+}
+
+async function getGiveawayEntryCount(env, giveawayId) {
+  try {
+    const row = await env.DB.prepare("SELECT COUNT(*) as count FROM giveaway_entries WHERE giveaway_id = ?").bind(giveawayId).first();
+    return Number(row?.count || 0);
+  } catch (e) { return 0; }
+}
+
+async function updateGiveawayMessage(env, giveaway) {
+  if (!giveaway.message_chat_id || !giveaway.message_id) return;
+  try {
+    const count = await getGiveawayEntryCount(env, giveaway.id);
+    await tg(env, "editMessageText", {
+      chat_id: giveaway.message_chat_id,
+      message_id: giveaway.message_id,
+      text: MSG.getGiveawayMessage(giveaway, count),
+      parse_mode: "HTML",
+      reply_markup: KB.getGiveawayKeyboard(giveaway.id),
+    });
+  } catch (e) {}
+}
+
+async function deliverGiveawayPrize(env, giveaway, winnerId) {
+  try {
+    if (giveaway.prize_type === "balance") {
+      const amount = Number(giveaway.prize_value || 0);
+      if (amount > 0) {
+        await env.DB.prepare("UPDATE users SET balance = balance + ? WHERE telegram_id = ?").bind(amount, winnerId).run();
+        await tg(env, "sendMessage", {
+          chat_id: winnerId,
+          text: `${e("SUCCESS", "🎉")} <b>You Won the Giveaway!</b>\n\nPrize: <b>${amount.toLocaleString()} MMK</b> credited to your wallet.\nGiveaway: <b>${giveaway.title}</b>`,
+          parse_mode: "HTML",
+          reply_markup: KB.getSupportKeyboard()
+        });
+      }
+    } else if (giveaway.prize_type === "package") {
+      const keyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = ? LIMIT 1").bind(giveaway.prize_value).first();
+      if (!keyItem) {
+        await tg(env, "sendMessage", { chat_id: winnerId, text: `${e("WARNING", "⚠️")} <b>You Won the Giveaway!</b>\n\nPrize: <b>${giveaway.title}</b>\nWe are out of stock for this package right now. Our admin team will deliver your key shortly.`, parse_mode: "HTML", reply_markup: KB.getSupportKeyboard() });
+        return;
+      }
+      await env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(keyItem.id).run();
+      const pkg = CONFIG.PACKAGES[giveaway.prize_value];
+      await env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, ?, ?, ?)").bind(winnerId, giveaway.prize_value, keyItem.access_key, pkg?.price || 0).run();
+      await tg(env, "sendMessage", { chat_id: winnerId, text: MSG.getKeyDeliveryMessage(giveaway.prize_value, pkg?.price || 0, keyItem.access_key), parse_mode: "HTML" });
+    } else if (giveaway.prize_type === "test") {
+      const keyItem = await env.DB.prepare("SELECT id, access_key FROM keys WHERE category = 'test' LIMIT 1").first();
+      if (!keyItem) {
+        await tg(env, "sendMessage", { chat_id: winnerId, text: `${e("WARNING", "⚠️")} <b>You Won the Giveaway!</b>\n\nPrize: <b>${giveaway.title}</b>\nNo free test keys are in stock right now. Our admin team will deliver your key shortly.`, parse_mode: "HTML", reply_markup: KB.getSupportKeyboard() });
+        return;
+      }
+      await env.DB.prepare("DELETE FROM keys WHERE id = ?").bind(keyItem.id).run();
+      await env.DB.prepare("INSERT INTO orders (user_id, category, access_key, price) VALUES (?, 'test', ?, 0)").bind(winnerId, keyItem.access_key).run();
+      await tg(env, "sendMessage", { chat_id: winnerId, text: MSG.getActiveTestKeyMessage(keyItem.access_key), parse_mode: "HTML", reply_markup: KB.getSupportKeyboard() });
+    } else {
+      await tg(env, "sendMessage", {
+        chat_id: winnerId,
+        text: `${e("SUCCESS", "🎉")} <b>You Won the Giveaway!</b>\n\nPrize: <b>${giveaway.title}</b>\n${giveaway.prize_value ? `Prize details: ${giveaway.prize_value}\n` : ""}Our admin team will contact you about delivery.`,
+        parse_mode: "HTML",
+        reply_markup: KB.getSupportKeyboard()
+      });
+    }
+  } catch (e) {}
+}
+
+async function endGiveaway(env, giveaway) {
+  try {
+    const entries = await env.DB.prepare("SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?").bind(giveaway.id).all();
+    const ids = (entries.results || []).map((r) => r.user_id);
+    const shuffled = [...ids].sort(() => Math.random() - 0.5);
+    const winnerIds = shuffled.slice(0, Math.max(1, Number(giveaway.winners_count || 1)));
+    const winners = [];
+    for (const wid of winnerIds) {
+      const row = await env.DB.prepare("SELECT first_name FROM users WHERE telegram_id = ?").bind(wid).first();
+      winners.push({ user_id: wid, first_name: row?.first_name || "Customer" });
+    }
+    await env.DB.prepare("UPDATE giveaways SET status = 'ended' WHERE id = ?").bind(giveaway.id).run();
+    const count = ids.length;
+    if (giveaway.message_chat_id && giveaway.message_id) {
+      try {
+        await tg(env, "deleteMessage", {
+          chat_id: giveaway.message_chat_id,
+          message_id: giveaway.message_id,
+        });
+      } catch (e) {}
+    }
+    for (const w of winners) await deliverGiveawayPrize(env, giveaway, w.user_id);
+    const paymentGroupId = String(env.PAYMENT_GROUP_ID || "").trim();
+    if (paymentGroupId) {
+      await tg(env, "sendMessage", {
+        chat_id: paymentGroupId,
+        text: MSG.getGiveawayWinnersMessage(giveaway, winners, count),
+        parse_mode: "HTML",
+      });
+    }
+    return winners;
+  } catch (e) { return []; }
+}
+
+async function resolveBanTarget(env, msg, arg) {
+  try {
+    if (msg.reply_to_message?.from?.id) {
+      const uid = String(msg.reply_to_message.from.id);
+      const row = await env.DB.prepare("SELECT * FROM users WHERE telegram_id = ?").bind(uid).first();
+      return { userRow: row, userId: uid };
+    }
+  } catch (e) {}
+  if (!arg) return { userRow: null, userId: null };
+  const clean = String(arg).trim().replace(/^@/, "");
+  if (!clean) return { userRow: null, userId: null };
+  try {
+    if (/^\d+$/.test(clean)) {
+      const row = await env.DB.prepare("SELECT * FROM users WHERE telegram_id = ?").bind(clean).first();
+      return { userRow: row, userId: row ? String(row.telegram_id) : null };
+    }
+    const row = await env.DB.prepare("SELECT * FROM users WHERE LOWER(username) = LOWER(?)").bind(clean).first();
+    return { userRow: row, userId: row ? String(row.telegram_id) : null };
+  } catch (e) { return { userRow: null, userId: null }; }
 }
 
 function isMatchChatId(chatId, targetGroupId) {
@@ -415,35 +655,216 @@ async function handleMessage(msg, env) {
     const isAdmin = await checkIsAdmin(env, chatId, msg.from);
     if (!isAdmin) return;
 
-    if (text.startsWith("/ban")) {
-      const targetId = text.split(/\s+/)[1]?.trim();
-      if (targetId) {
-        await env.DB.prepare("UPDATE users SET is_banned = 1 WHERE telegram_id = ?").bind(targetId).run();
-        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("BAN", "🚫")} User <code>${targetId}</code> has been banned.`, parse_mode: "HTML" });
-        try {
-          await tg(env, "sendMessage", {
-            chat_id: targetId,
-            text: `${e("BAN", "🚫")} <b>Account Suspended</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account has been suspended for violating store rules.`,
-            parse_mode: "HTML"
-          });
-        } catch (_) {}
+    // --- GIVEAWAY SETUP: /giftway wizard + /cancel (added) ---
+    if (text.split("@")[0].split(/\s+/)[0].toLowerCase() === "/giftway") {
+      await ensureGiveawayTables(env);
+      await checkAndPostScheduledGiveaways(env);
+      const activeGift = await getLatestActiveGiveaway(env);
+      if (activeGift) {
+        await env.DB.prepare("INSERT OR REPLACE INTO giveaway_drafts (admin_id, group_id, step, title, custom_message, prize_type, prize_value, winners_count, max_participants, duration_hours, prompt_message_id) VALUES (?, ?, 'active_choice', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)").bind(msg.from.id, chatId).run();
+        const choicePrompt = await tgJson(env, "sendMessage", { chat_id: chatId, text: MSG.getGiveawayActiveChoiceMessage(activeGift), parse_mode: "HTML", reply_markup: KB.getGiveawayActiveChoiceKeyboard() });
+        if (choicePrompt?.ok && choicePrompt.result?.message_id) {
+          await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(choicePrompt.result.message_id, msg.from.id, chatId).run();
+        }
+        return;
+      }
+      await env.DB.prepare("INSERT OR REPLACE INTO giveaway_drafts (admin_id, group_id, step, title, custom_message, prize_type, prize_value, winners_count, max_participants, duration_hours, prompt_message_id) VALUES (?, ?, 'title', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)").bind(msg.from.id, chatId).run();
+      const startPrompt = await tgJson(env, "sendMessage", { chat_id: chatId, text: `${e("FREEBIES", "🎁")} <b>Giveaway Setup (1/7)</b>\n\nSend the giveaway title, or /cancel.`, parse_mode: "HTML" });
+      if (startPrompt?.ok && startPrompt.result?.message_id) {
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(startPrompt.result.message_id, msg.from.id, chatId).run();
       }
       return;
     }
-
-    if (text.startsWith("/unban")) {
-      const targetId = text.split(/\s+/)[1]?.trim();
-      if (targetId) {
-        await env.DB.prepare("UPDATE users SET is_banned = 0 WHERE telegram_id = ?").bind(targetId).run();
-        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("DONE", "✅")} User <code>${targetId}</code> has been unbanned.`, parse_mode: "HTML" });
+    // Wizard answers: only plain (non-command) messages from an admin with a draft.
+    {
+      await ensureGiveawayTables(env);
+      const draft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+      if (draft) {
         try {
-          await tg(env, "sendMessage", {
-            chat_id: targetId,
-            text: `${e("SUCCESS", "🎉")} <b>Account Re-activated</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account suspension has been lifted. You can now use the store.`,
-            parse_mode: "HTML"
-          });
-        } catch (_) {}
+          await tg(env, "deleteMessage", { chat_id: msg.chat.id, message_id: msg.message_id});
+        } catch (e) {}
+
+        if (text === "/cancel") {
+          const cancelPromptId = draft.prompt_message_id;
+          await env.DB.prepare("DELETE FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).run();
+          if (cancelPromptId) {
+            const edited = await tgJson(env, "editMessageText", { chat_id: chatId, message_id: cancelPromptId, text: `${e("FALSE", "❌")} Giveaway setup cancelled.`, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } });
+            if (!edited?.ok) await tg(env, "sendMessage", { chat_id: chatId, text: `${e("FALSE", "❌")} Giveaway setup cancelled.`, parse_mode: "HTML" });
+          } else {
+            await tg(env, "sendMessage", { chat_id: chatId, text: `${e("FALSE", "❌")} Giveaway setup cancelled.`, parse_mode: "HTML" });
+          }
+          return;
+        }
+        if (text === "/skip" && draft.step === "custom_message") {
+          await env.DB.prepare("UPDATE giveaway_drafts SET custom_message = NULL, step = 'prize_type' WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).run();
+          const skipDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+          const newPromptId = await updateWizardPrompt(env, chatId, skipDraft, `${e("STAR", "✨")} <b>Giveaway Setup (3/7)</b>\n\nChoose a prize type below, or /cancel.`, KB.getGiveawayPrizeKeyboard());
+          if (newPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(newPromptId, msg.from.id, chatId).run();
+          return;
+        }
+        if (!text.startsWith("/")) {
+          if (draft.step === "title") {
+            await env.DB.prepare("UPDATE giveaway_drafts SET title = ?, step = 'custom_message' WHERE admin_id = ? AND group_id = ?").bind(text, msg.from.id, chatId).run();
+            const titleDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+            const newPromptId = await updateWizardPrompt(env, chatId, titleDraft, `${e("STAR", "✨")} <b>Giveaway Setup (2/7)</b>\n\nSend a custom message for the giveaway post, or send /skip to leave it blank, or /cancel.`, { inline_keyboard: [] });
+            if (newPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(newPromptId, msg.from.id, chatId).run();
+            return;
+          }
+          if (draft.step === "custom_message") {
+            await env.DB.prepare("UPDATE giveaway_drafts SET custom_message = ?, step = 'prize_type' WHERE admin_id = ? AND group_id = ?").bind(text, msg.from.id, chatId).run();
+            const customDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+            const newPromptId = await updateWizardPrompt(env, chatId, customDraft, `${e("STAR", "✨")} <b>Giveaway Setup (3/7)</b>\n\nChoose a prize type below, or /cancel.`, KB.getGiveawayPrizeKeyboard());
+            if (newPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(newPromptId, msg.from.id, chatId).run();
+            return;
+          }
+          if (draft.step === "prize_type" || draft.step === "prize_package") {
+            await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Please choose a prize type / package using the buttons above, or /cancel.`, parse_mode: "HTML" });
+            return;
+          }
+          if (draft.step === "prize_value") {
+            if (draft.prize_type === "balance") {
+              const amount = parseInt(text.replace(/,/g, ""), 10);
+              if (isNaN(amount) || amount <= 0) {
+                await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Invalid amount. Send digits only (e.g. 5000), or /cancel.`, parse_mode: "HTML" });
+                return;
+              }
+              await env.DB.prepare("UPDATE giveaway_drafts SET prize_value = ?, step = 'winners' WHERE admin_id = ? AND group_id = ?").bind(String(amount), msg.from.id, chatId).run();
+              const balDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+              const balPromptId = await updateWizardPrompt(env, chatId, balDraft, `${e("USERS", "👥")} <b>Giveaway Setup (5/7)</b>\n\nSend the number of winners (e.g. 1, 3, 5), or /cancel.`, { inline_keyboard: [] });
+              if (balPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(balPromptId, msg.from.id, chatId).run();
+              return;
+            }
+            if (draft.prize_type === "custom") {
+              await env.DB.prepare("UPDATE giveaway_drafts SET prize_value = ?, step = 'winners' WHERE admin_id = ? AND group_id = ?").bind(text, msg.from.id, chatId).run();
+              const custDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+              const custPromptId = await updateWizardPrompt(env, chatId, custDraft, `${e("USERS", "👥")} <b>Giveaway Setup (5/7)</b>\n\nSend the number of winners (e.g. 1, 3, 5), or /cancel.`, { inline_keyboard: [] });
+              if (custPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(custPromptId, msg.from.id, chatId).run();
+              return;
+            }
+          }
+          if (draft.step === "winners") {
+            const n = parseInt(text, 10);
+            if (isNaN(n) || n < 1) {
+              await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Invalid winners count. Send a number of 1 or more, or /cancel.`, parse_mode: "HTML" });
+              return;
+            }
+            await env.DB.prepare("UPDATE giveaway_drafts SET winners_count = ?, step = 'duration' WHERE admin_id = ? AND group_id = ?").bind(n, msg.from.id, chatId).run();
+            const winDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+            const winPromptId = await updateWizardPrompt(env, chatId, winDraft, `${e("CLOCK", "⏳")} <b>Giveaway Setup (6/7)</b>\n\nSend the duration in hours (e.g. 24), or /cancel.`, { inline_keyboard: [] });
+            if (winPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(winPromptId, msg.from.id, chatId).run();
+            return;
+          }
+          if (draft.step === "duration") {
+            const n = parseInt(text, 10);
+            if (isNaN(n) || n < 1) {
+              await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Invalid duration. Send hours as a number of 1 or more, or /cancel.`, parse_mode: "HTML" });
+              return;
+            }
+            await env.DB.prepare("UPDATE giveaway_drafts SET duration_hours = ?, step = 'max' WHERE admin_id = ? AND group_id = ?").bind(n, msg.from.id, chatId).run();
+            const durDraft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+            const durPromptId = await updateWizardPrompt(env, chatId, durDraft, `${e("USERS", "👥")} <b>Giveaway Setup (7/7)</b>\n\nSend the maximum number of participants (0 = unlimited), or /cancel.`, { inline_keyboard: [] });
+            if (durPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(durPromptId, msg.from.id, chatId).run();
+            return;
+          }
+          if (draft.step === "max") {
+            const n = parseInt(text, 10);
+            if (isNaN(n) || n < 0) {
+              await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Invalid limit. Send 0 for unlimited, or a number of 1 or more, or /cancel.`, parse_mode: "HTML" });
+              return;
+            }
+            await env.DB.prepare("UPDATE giveaway_drafts SET max_participants = ?, step = 'confirm' WHERE admin_id = ? AND group_id = ?").bind(n, msg.from.id, chatId).run();
+            const updated = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).first();
+            const sumPromptId = await updateWizardPrompt(env, chatId, updated, MSG.getGiveawaySummaryMessage(updated), Number(updated.schedule_mode || 0) === 1 ? KB.getGiveawayScheduleConfirmKeyboard() : KB.getGiveawayConfirmKeyboard());
+            if (sumPromptId) await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(sumPromptId, msg.from.id, chatId).run();
+            return;
+          }
+          if (draft.step === "schedule_date") {
+            const scheduledAt = parseYangonDateTime(text);
+            if (!scheduledAt || scheduledAt <= Date.now()) {
+              await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Invalid or past date. Send a future date, e.g. <code>5 Nov 2026, 10:00 am</code> (Asia/Yangon), or /cancel.`, parse_mode: "HTML" });
+              return;
+            }
+            await env.DB.prepare("INSERT INTO scheduled_giveaways (title, custom_message, prize_type, prize_value, winners_count, max_participants, duration_hours, scheduled_at, group_id, created_by, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled')").bind(draft.title, draft.custom_message, draft.prize_type, draft.prize_value, draft.winners_count, draft.max_participants, draft.duration_hours, scheduledAt, chatId, msg.from.id, new Date().toISOString()).run();
+            const schedDraft = { title: draft.title, custom_message: draft.custom_message, prize_type: draft.prize_type, prize_value: draft.prize_value };
+            await env.DB.prepare("DELETE FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(msg.from.id, chatId).run();
+            const schedPromptId = await updateWizardPrompt(env, chatId, { ...draft, prompt_message_id: draft.prompt_message_id }, MSG.getGiveawayScheduledMessage(schedDraft, scheduledAt), { inline_keyboard: [] });
+            if (schedPromptId) { /* prompt already edited in place; no new message needed */ }
+            return;
+          }
+          if (draft.step === "confirm") {
+            await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Please tap Confirm or Cancel on the summary above, or /cancel.`, parse_mode: "HTML" });
+            return;
+          }
+        }
       }
+    }
+
+    // --- /banlist (added) ---
+    if (text.split("@")[0].split(/\s+/)[0].toLowerCase() === "/banlist") {
+      const rows = await env.DB.prepare("SELECT telegram_id, username, first_name FROM users WHERE is_banned = 1 ORDER BY telegram_id ASC LIMIT 50").all();
+      await tg(env, "sendMessage", { chat_id: chatId, text: MSG.getBanListMessage(rows.results || []), parse_mode: "HTML" });
+      return;
+    }
+
+    // --- /announce with preview + confirm (added; /broadcast below is untouched) ---
+    if (text.startsWith("/announce")) {
+      const announceText = text.replace(/^\/announce(@\w+)?\s*/, "").trim();
+      if (!announceText) {
+        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} <b>Usage:</b> <code>/announce Your announcement text</code>`, parse_mode: "HTML" });
+        return;
+      }
+      await ensureGiveawayTables(env);
+      const res = await env.DB.prepare("INSERT INTO pending_announcements (admin_id, group_id, text, created_at) VALUES (?, ?, ?, ?)").bind(msg.from.id, chatId, announceText, new Date().toISOString()).run();
+      const pendingId = res.meta?.last_row_id;
+      if (!pendingId) {
+        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} Could not save this announcement. Please try again.`, parse_mode: "HTML" });
+        return;
+      }
+      await tg(env, "sendMessage", { chat_id: chatId, text: MSG.getAnnouncePreviewMessage(announceText), parse_mode: "HTML", reply_markup: KB.getAnnounceConfirmKeyboard(pendingId) });
+      return;
+    }
+
+    if (text.startsWith("/ban") && text.split("@")[0].split(/\s+/)[0].toLowerCase() === "/ban") {
+      const arg = text.split(/\s+/)[1]?.trim();
+      const target = await resolveBanTarget(env, msg, arg);
+      if (!target.userRow) {
+        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} <b>User Not Found:</b> ${arg ? `<code>${arg}</code>` : "reply to the user's message or send an ID / @username"}`, parse_mode: "HTML" });
+        return;
+      }
+      const targetId = String(target.userRow.telegram_id);
+      await env.DB.prepare("UPDATE users SET is_banned = 1 WHERE telegram_id = ?").bind(targetId).run();
+      await tg(env, "sendMessage", { chat_id: chatId, text: `${e("BAN", "🚫")} User <code>${targetId}</code> (${target.userRow.first_name || ""} @${target.userRow.username || "None"}) has been banned.`, parse_mode: "HTML" });
+      try {
+        await tg(env, "sendMessage", {
+          chat_id: targetId,
+          text: `${e("BAN", "🚫")} <b>Account Suspended</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account has been suspended for violating store rules.`,
+          parse_mode: "HTML"
+        });
+      } catch (_) {}
+      return;
+    }
+
+    if (text.startsWith("/unban") && text.split("@")[0].split(/\s+/)[0].toLowerCase() === "/unban") {
+      const arg = text.split(/\s+/)[1]?.trim();
+      const target = await resolveBanTarget(env, msg, arg);
+      if (!target.userRow) {
+        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} <b>User Not Found:</b> ${arg ? `<code>${arg}</code>` : "reply to the user's message or send an ID / @username"}`, parse_mode: "HTML" });
+        return;
+      }
+      if (target.userRow.is_banned !== 1) {
+        await tg(env, "sendMessage", { chat_id: chatId, text: `${e("WARNING", "⚠️")} User <code>${target.userRow.telegram_id}</code> is not currently banned.`, parse_mode: "HTML" });
+        return;
+      }
+      const targetId = String(target.userRow.telegram_id);
+      await env.DB.prepare("UPDATE users SET is_banned = 0 WHERE telegram_id = ?").bind(targetId).run();
+      await tg(env, "sendMessage", { chat_id: chatId, text: `${e("DONE", "✅")} User <code>${targetId}</code> (${target.userRow.first_name || ""} @${target.userRow.username || "None"}) has been unbanned.`, parse_mode: "HTML" });
+      try {
+        await tg(env, "sendMessage", {
+          chat_id: targetId,
+          text: `${e("SUCCESS", "🎉")} <b>Account Re-activated</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\nYour account suspension has been lifted. You can now use the store.`,
+          parse_mode: "HTML"
+        });
+      } catch (_) {}
       return;
     }
 
@@ -597,14 +1018,20 @@ async function handleCallback(cb, env) {
   const paymentGroupId = String(env.PAYMENT_GROUP_ID || "").trim();
   const stockGroupId = String(env.STOCK_GROUP_ID || "").trim();
 
+  // v3: edit the message the button is on. If that edit fails (message deleted
+  // or too old), fall back to a new message in a private chat only, so the
+  // user is never left with no reply. Group/channel messages are not resent.
   async function editMsg(text, replyMarkup) {
-    await tg(env, "editMessageText", {
+    const edited = await tgJson(env, "editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       text: text,
       parse_mode: "HTML",
       reply_markup: replyMarkup,
     });
+    if (!edited?.ok && !String(chatId).startsWith("-")) {
+      await tg(env, "sendMessage", { chat_id: chatId, text: text, parse_mode: "HTML", reply_markup: replyMarkup });
+    }
   }
 
   if (data.startsWith("out_of_stock_")) {
@@ -616,6 +1043,43 @@ async function handleCallback(cb, env) {
     return;
   }
 
+  // --- GIVEAWAY JOIN (public giveaway message, any chat) ---
+  if (data.startsWith("gw_join_")) {
+    const giftId = parseInt(data.replace("gw_join_", ""), 10);
+    await ensureGiveawayTables(env);
+    const gift = await env.DB.prepare("SELECT * FROM giveaways WHERE id = ?").bind(giftId).first();
+    if (!gift || gift.status !== "active") {
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "This giveaway is no longer active.", show_alert: true });
+      return;
+    }
+    if (gift.ends_at && Date.now() >= Number(gift.ends_at)) {
+      await endGiveaway(env, gift);
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "This giveaway has ended.", show_alert: true });
+      return;
+    }
+    const existingUser = await env.DB.prepare("SELECT * FROM users WHERE telegram_id = ?").bind(userId).first();
+    if (existingUser?.is_banned === 1) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "You are banned and cannot join giveaways.", show_alert: true });
+      return;
+    }
+    await getOrCreateUser(env, cb.from);
+    const count = await getGiveawayEntryCount(env, giftId);
+    if (gift.max_participants && Number(gift.max_participants) > 0 && count >= Number(gift.max_participants)) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "This giveaway is full.", show_alert: true });
+      return;
+    }
+    try {
+      await env.DB.prepare("INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)").bind(giftId, userId).run();
+    } catch (e) {
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "You have already joined this giveaway." });
+      return;
+    }
+    await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "You joined the giveaway!" });
+    await updateGiveawayMessage(env, gift);
+    return;
+  }
+
+
   // --- PAYMENT GROUP AUDIT ACTIONS ---
   if (paymentGroupId && isMatchChatId(chatId, paymentGroupId)) {
     const isAdmin = await checkIsAdmin(env, chatId, cb.from);
@@ -623,6 +1087,161 @@ async function handleCallback(cb, env) {
       await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "⚠️ Only store administrators can perform this action!", show_alert: true });
       return;
     }
+
+    // --- ANNOUNCE CONFIRM / CANCEL (added) ---
+    if (data.startsWith("announce_confirm_")) {
+      const pendingId = parseInt(data.replace("announce_confirm_", ""), 10);
+      await ensureGiveawayTables(env);
+      const pending = await env.DB.prepare("SELECT * FROM pending_announcements WHERE id = ?").bind(pendingId).first();
+      if (!pending) {
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Announcement not found." });
+        return;
+      }
+      const allUsers = await env.DB.prepare("SELECT telegram_id FROM users WHERE is_banned = 0").all();
+      let successCount = 0;
+      for (const u of allUsers.results || []) {
+        try { await tg(env, "sendMessage", { chat_id: u.telegram_id, text: `${e("ANNOUNCE", "📢")} <b>Store Announcement</b>\n\n${pending.text}`, parse_mode: "HTML" }); successCount++; } catch (e) {}
+      }
+      await env.DB.prepare("DELETE FROM pending_announcements WHERE id = ?").bind(pendingId).run();
+      await editMsg(`${e("DONE", "✅")} Announcement sent to <b>${successCount}</b> users.`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Announcement sent!" });
+      return;
+    }
+    if (data.startsWith("announce_cancel_")) {
+      const pendingId = parseInt(data.replace("announce_cancel_", ""), 10);
+      await ensureGiveawayTables(env);
+      await env.DB.prepare("DELETE FROM pending_announcements WHERE id = ?").bind(pendingId).run();
+      await editMsg(`${e("FALSE", "❌")} Announcement cancelled.`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Cancelled." });
+      return;
+    }
+
+    // --- GIVEAWAY WIZARD BUTTONS (added) ---
+    if (data.startsWith("gw_prize_")) {
+      const prizeType = data.replace("gw_prize_", "");
+      await ensureGiveawayTables(env);
+      const draft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).first();
+      if (!draft) { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "No giveaway draft found. Send /giftway first." }); return; }
+      if (prizeType === "balance") {
+        await env.DB.prepare("UPDATE giveaway_drafts SET prize_type = ?, step = 'prize_value' WHERE admin_id = ? AND group_id = ?").bind(prizeType, userId, chatId).run();
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Wallet balance selected." });
+        await editMsg(`${e("BALANCE", "💰")} <b>Giveaway Setup (4/7)</b>\n\nSend the wallet balance amount in MMK (digits only, e.g. 5000), or /cancel.`, { inline_keyboard: [] });
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      } else if (prizeType === "package") {
+        await env.DB.prepare("UPDATE giveaway_drafts SET prize_type = ?, step = 'prize_package' WHERE admin_id = ? AND group_id = ?").bind(prizeType, userId, chatId).run();
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Package selected." });
+        await editMsg(`${e("SHOP", "🛍")} <b>Giveaway Setup (4/7)</b>\n\nChoose a package below, or /cancel.`, KB.getGiveawayPackageKeyboard());
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      } else if (prizeType === "test") {
+        await env.DB.prepare("UPDATE giveaway_drafts SET prize_type = ?, prize_value = 'test', step = 'winners' WHERE admin_id = ? AND group_id = ?").bind(prizeType, userId, chatId).run();
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Free test key selected." });
+        await editMsg(`${e("USERS", "👥")} <b>Giveaway Setup (5/7)</b>\n\nSend the number of winners (e.g. 1, 3, 5), or /cancel.`, { inline_keyboard: [] });
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      } else if (prizeType === "custom") {
+        await env.DB.prepare("UPDATE giveaway_drafts SET prize_type = ?, step = 'prize_value' WHERE admin_id = ? AND group_id = ?").bind(prizeType, userId, chatId).run();
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Custom prize selected." });
+        await editMsg(`${e("STAR", "✨")} <b>Giveaway Setup (4/7)</b>\n\nSend the custom prize description, or /cancel.`, { inline_keyboard: [] });
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      }
+      return;
+    }
+    if (data.startsWith("gw_pkg_")) {
+      const pkgKey = data.replace("gw_pkg_", "");
+      if (!CONFIG.PACKAGES[pkgKey]) { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Invalid package." }); return; }
+      await ensureGiveawayTables(env);
+      await env.DB.prepare("UPDATE giveaway_drafts SET prize_value = ?, step = 'winners' WHERE admin_id = ? AND group_id = ?").bind(pkgKey, userId, chatId).run();
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Package selected." });
+      await editMsg(`${e("USERS", "👥")} <b>Giveaway Setup (5/7)</b>\n\nSend the number of winners (e.g. 1, 3, 5), or /cancel.`, { inline_keyboard: [] });
+      await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      return;
+    }
+    // --- GIVEAWAY ACTIVE CHOICE (v3): Replace / Schedule / Cancel ---
+    if (data === "gw_active_replace" || data === "gw_active_schedule" || data === "gw_active_cancel") {
+      await ensureGiveawayTables(env);
+      const draft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).first();
+      if (!draft || draft.step !== "active_choice") { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "No active-giveaway choice is pending." }); return; }
+      if (data === "gw_active_cancel") {
+        await env.DB.prepare("DELETE FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).run();
+        await editMsg(`${e("FALSE", "❌")} Cancelled. The active giveaway keeps running.`, { inline_keyboard: [] });
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Cancelled." });
+        return;
+      }
+      const scheduleMode = data === "gw_active_schedule" ? 1 : 0;
+      await env.DB.prepare("UPDATE giveaway_drafts SET step = 'title', schedule_mode = ? WHERE admin_id = ? AND group_id = ?").bind(scheduleMode, userId, chatId).run();
+      await editMsg(`${e("FREEBIES", "🎁")} <b>Giveaway Setup (1/7)</b>\n\nSend the giveaway title, or /cancel.${scheduleMode ? "\n\n<i>Scheduled mode: after Confirm you will set the post date.</i>" : ""}`, { inline_keyboard: [] });
+      await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: scheduleMode ? "Scheduled mode selected." : "Replace mode selected." });
+      return;
+    }
+    if (data === "gw_create_confirm") {
+      await ensureGiveawayTables(env);
+      const draft = await env.DB.prepare("SELECT * FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).first();
+      if (!draft || draft.step !== "confirm") { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "No giveaway ready to confirm." }); return; }
+      if (Number(draft.schedule_mode || 0) === 1) {
+        // Scheduled mode (v3): do not post now. Ask for the post date next.
+        await env.DB.prepare("UPDATE giveaway_drafts SET step = 'schedule_date' WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).run();
+        await editMsg(MSG.getGiveawaySchedulePromptMessage(draft), { inline_keyboard: [] });
+        await env.DB.prepare("UPDATE giveaway_drafts SET prompt_message_id = ? WHERE admin_id = ? AND group_id = ?").bind(messageId, userId, chatId).run();
+        await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Now set the post date." });
+        return;
+      }
+      await env.DB.prepare("DELETE FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).run();
+      const gift = await createAndPostGiveaway(env, { title: draft.title, custom_message: draft.custom_message, prize_type: draft.prize_type, prize_value: draft.prize_value, winners_count: draft.winners_count, max_participants: draft.max_participants, duration_hours: draft.duration_hours, created_by: userId }, paymentGroupId);
+      if (!gift) { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Could not create giveaway." }); return; }
+      await editMsg(`${e("DONE", "✅")} Giveaway #${gift.id} started!`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Giveaway started!" });
+      return;
+    }
+    if (data === "gw_draft_cancel") {
+      await ensureGiveawayTables(env);
+      await env.DB.prepare("DELETE FROM giveaway_drafts WHERE admin_id = ? AND group_id = ?").bind(userId, chatId).run();
+      await editMsg(`${e("FALSE", "❌")} Giveaway setup cancelled.`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Cancelled." });
+      return;
+    }
+    if (data.startsWith("gw_end_")) {
+      const giftId = parseInt(data.replace("gw_end_", ""), 10);
+      await ensureGiveawayTables(env);
+      const gift = await env.DB.prepare("SELECT * FROM giveaways WHERE id = ?").bind(giftId).first();
+      if (!gift || gift.status !== "active") { await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Giveaway is not active." }); return; }
+      await endGiveaway(env, gift);
+      await editMsg(`${e("DONE", "✅")} Giveaway #${giftId} ended and winners drawn.`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Giveaway ended!" });
+      return;
+    }
+    if (data.startsWith("gw_giveaway_cancel_")) {
+      const giftId = parseInt(data.replace("gw_giveaway_cancel_", ""), 10);
+      await ensureGiveawayTables(env);
+      const gift = await env.DB.prepare("SELECT * FROM giveaways WHERE id = ?").bind(giftId).first();
+      if (gift && gift.status === "active") {
+        await env.DB.prepare("UPDATE giveaways SET status = 'cancelled' WHERE id = ?").bind(giftId).run();
+        if (gift.message_chat_id && gift.message_id) {
+          try { await tg(env, "editMessageText", { chat_id: gift.message_chat_id, message_id: gift.message_id, text: `${e("FALSE", "❌")} <b>Giveaway Cancelled: ${gift.title}</b>`, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } }); } catch (e) {}
+        }
+      }
+      await editMsg(`${e("FALSE", "❌")} Giveaway #${giftId} cancelled.`, { inline_keyboard: [] });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Cancelled." });
+      return;
+    }
+    if (data.startsWith("gw_participants_")) {
+      const giftId = parseInt(data.replace("gw_participants_", ""), 10);
+      await ensureGiveawayTables(env);
+      const entries = await env.DB.prepare("SELECT user_id FROM giveaway_entries WHERE giveaway_id = ? ORDER BY rowid ASC LIMIT 50").bind(giftId).all();
+      const rows = entries.results || [];
+      let listText = "No participants yet.";
+      if (rows.length > 0) {
+        const lines = [];
+        for (const r of rows) {
+          const u = await env.DB.prepare("SELECT first_name, username FROM users WHERE telegram_id = ?").bind(r.user_id).first();
+          lines.push(`• ${u?.first_name || "Customer"} (<code>${r.user_id}</code>) @${u?.username || "None"}`);
+        }
+        listText = lines.join("\n");
+      }
+      await tg(env, "sendMessage", { chat_id: paymentGroupId, text: `${e("USERS", "👥")} <b>Giveaway #${giftId} Participants (${rows.length} shown)</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n${listText}`, parse_mode: "HTML" });
+      await tg(env, "answerCallbackQuery", { callback_query_id: callbackId, text: "Participants list sent." });
+      return;
+    }
+
 
     // 1. APPROVE SLIP
     if (data.startsWith("pay_app_")) {
@@ -818,6 +1437,24 @@ async function handleCallback(cb, env) {
   const user = await getOrCreateUser(env, cb.from);
   if (user.is_banned === 1) return;
   const balance = Number(user.balance || 0);
+
+  // Giveaway button from bot main menu (v2)
+  if (data === "menu_giftway") {
+    await ensureGiveawayTables(env);
+    await checkAndPostScheduledGiveaways(env);
+    let gift = await getLatestActiveGiveaway(env);
+    if (gift && gift.ends_at && Date.now() >= Number(gift.ends_at)) {
+      await endGiveaway(env, gift);
+      gift = null;
+    }
+    if (!gift) {
+      await editMsg(MSG.getGiveawayUnavailableMessage(),KB.getGiveawayUnavailableKeyboard());
+      return;
+    }
+    const giftCount = await getGiveawayEntryCount(env, gift.id);
+    await editMsg(MSG.getGiveawayMessage(gift, giftCount), KB.getGiveawayUserKeyboard(gift.id));
+    return;
+  }
 
   // Return Home
   if (data === "menu_home") {
@@ -1050,7 +1687,7 @@ async function handleCallback(cb, env) {
         {
           inline_keyboard: [
             [makeBtn("Back to Plans", "callback_data", `cat_${pkg.category_type}`, null, "BTN_BACK")],
-            [makeBtn("Contact Support", "url", `https://t.me/nevera33`, null, "BTN_SUPPORT")]
+            [makeBtn("Contact Support", "url", `https://t.me/JaiwaJG`, null, "BTN_SUPPORT")]
           ]
         }
       );

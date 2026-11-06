@@ -43,7 +43,8 @@ export function getWelcomeMessage(firstName) {
     `We provide ultra-fast, stable, and encrypted <b>Outline VPN Access Keys</b> with instant automated delivery.\n\n` +
     `<blockquote>` +
     `${e("SHOP", "🛍")} <b>Shop</b> — Browse & buy Outline Private Key\n` +
-    `${e("FREEBIES", "🎁")} <b>Freebies</b> — Claim monthly free test key\n` +
+    `${e("KEY", "🎁")} <b>Freebies</b> — Claim monthly free test key\n` +
+    `${e("FREEBIES", "🎁")} <b>Giveaway</b> — Claim availiable Gift\n` +
     `${e("DEPOSIT", "💳")} <b>Deposit</b> — Top up wallet balance\n` +
     `${e("PROFILE", "👤")} <b>My Profile</b> — Balance, keys & order history\n` +
     `${e("STAR", "✨")} <b>Referral</b> — Invite friends & earn 5%\n` +
@@ -405,5 +406,146 @@ export function formatStoreAnalyticsReport(data) {
     `${e("CLOCK", "⏳")} <b>Audit Queue:</b> ${fmt(pendingAudit)} Pending Slips\n` +
     `<b>━━━━━━━━━━━━━━━━━━━━</b>\n` +
     `${e("BTN_REFRESH", "🔄")} <i>Last updated: ${nowStr}</i>`
+  );
+}
+
+// --- Giveaway / announce / ban-list messages (added; existing messages untouched) ---
+function escapeHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function formatGiveawayPrize(prizeType, prizeValue) {
+  if (prizeType === "balance") return `${Number(prizeValue || 0).toLocaleString()} MMK Wallet Balance`;
+  if (prizeType === "package") {
+    const pkg = CONFIG.PACKAGES[prizeValue];
+    return pkg ? pkg.name : String(prizeValue || "");
+  }
+  if (prizeType === "test") return "Free Test Key";
+  return String(prizeValue || "");
+}
+
+export function getGiveawayMessage(giveaway, participantCount = 0) {
+  const maxText = giveaway.max_participants && Number(giveaway.max_participants) > 0
+    ? `${participantCount} / ${giveaway.max_participants}`
+    : `${participantCount} (Unlimited)`;
+  const customBlock = giveaway.custom_message ? `${escapeHtml(giveaway.custom_message)}\n\n` : "";
+  return (
+    `${e("FREEBIES", "🎁")} <b> ${giveaway.title}</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    customBlock +
+    `<blockquote>` +
+    `${e("STAR", "✨")} <b>Prize:</b> ${formatGiveawayPrize(giveaway.prize_type, giveaway.prize_value)}\n` +
+    `${e("PROFILE", "👤")} <b>Winners:</b> ${giveaway.winners_count}\n` +
+    `${e("USERS", "👥")} <b>Participants:</b> ${maxText}\n` +
+    `${e("CLOCK", "⏳")} <b>Ends:</b> ${formatMyanmarTime(new Date(Number(giveaway.ends_at)))}` +
+    `</blockquote>\n\n` +
+    `${e("DOWN", "👇")} <i>Tap Join Giveaway below to enter. One entry per user.</i>`
+  );
+}
+
+export function getGiveawaySummaryMessage(draft) {
+  return (
+    `${e("FREEBIES", "🎁")} <b>Giveaway Summary — Confirm to Start</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `<blockquote>` +
+    `• <b>Title:</b> ${draft.title}\n` +
+    `• <b>Custom Message:</b> ${draft.custom_message ? escapeHtml(draft.custom_message) : "None"}\n` +
+    `• <b>Prize:</b> ${formatGiveawayPrize(draft.prize_type, draft.prize_value)}\n` +
+    `• <b>Winners:</b> ${draft.winners_count}\n` +
+    `• <b>Max Participants:</b> ${draft.max_participants && Number(draft.max_participants) > 0 ? draft.max_participants : "Unlimited"}\n` +
+    `• <b>Duration:</b> ${draft.duration_hours} hours` +
+    `</blockquote>\n\n` +
+    `<i>Confirm to post the giveaway. Cancel to discard it.</i>`
+  );
+}
+
+export function getGiveawayWinnersMessage(giveaway, winners, participantCount = 0) {
+  const list = winners.length > 0
+    ? winners.map((w, i) => `${i + 1}. ${w.first_name || "Customer"} (<code>${w.user_id}</code>)`).join("\n")
+    : "<i>No participants, so no winners were drawn.</i>";
+  const customBlockW = giveaway.custom_message ? `${escapeHtml(giveaway.custom_message)}\n\n` : "";
+  return (
+    `${e("FREEBIES", "🎁")} <b>Giveaway Ended: ${giveaway.title}</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    customBlockW +
+    `<blockquote>` +
+    `${e("STAR", "✨")} <b>Prize:</b> ${formatGiveawayPrize(giveaway.prize_type, giveaway.prize_value)}\n` +
+    `${e("USERS", "👥")} <b>Participants:</b> ${participantCount}` +
+    `</blockquote>\n\n` +
+    `<b>Winners:</b>\n${list}`
+  );
+}
+
+export function getGiveawayAdminMessage(giveaway, participantCount = 0) {
+  return (
+    `${e("FREEBIES", "🎁")} <b>Giveaway Created (#${giveaway.id})</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `• <b>Title:</b> ${giveaway.title}\n` +
+    `• <b>Custom Message:</b> ${giveaway.custom_message ? escapeHtml(giveaway.custom_message) : "None"}\n` +
+    `• <b>Prize:</b> ${formatGiveawayPrize(giveaway.prize_type, giveaway.prize_value)}\n` +
+    `• <b>Winners:</b> ${giveaway.winners_count}\n` +
+    `• <b>Participants:</b> ${participantCount}\n` +
+    `• <b>Ends:</b> ${formatMyanmarTime(new Date(Number(giveaway.ends_at)))}`
+  );
+}
+
+export function getAnnouncePreviewMessage(text) {
+  return (
+    `${e("ANNOUNCE", "📢")} <b>Announcement Preview</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `${text}\n\n` +
+    `<i>Confirm to send this to all non-banned users, or cancel.</i>`
+  );
+}
+
+export function getBanListMessage(bannedUsers) {
+  if (!bannedUsers || bannedUsers.length === 0) {
+    return `${e("BAN", "🚫")} <b>Banned Users</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n<i>No banned users.</i>`;
+  }
+  const list = bannedUsers.map((u) => `• ${u.first_name || ""} (<code>${u.telegram_id}</code>) @${u.username || "None"}`).join("\n");
+  return `${e("BAN", "🚫")} <b>Banned Users (${bannedUsers.length})</b>\n<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n${list}`;
+}
+
+export function getGiveawayUnavailableMessage() {
+  return (
+    `${e("FREEBIES", "🎁")} <b>Giveaway Unavailable</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `Coming soon! Please check back later.`
+  );
+}
+
+export function getGiveawayActiveChoiceMessage(giveaway) {
+  return (
+    `${e("FREEBIES", "🎁")} <b>Active Giveaway Already Running</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `• <b>Giveaway:</b> ${giveaway.title}\n` +
+    `• <b>Prize:</b> ${formatGiveawayPrize(giveaway.prize_type, giveaway.prize_value)}\n` +
+    `• <b>Ends:</b> ${formatMyanmarTime(new Date(Number(giveaway.ends_at)))}\n\n` +
+    `What do you want to do with the new giveaway?\n` +
+    `<i>Replace Now posts the new giveaway now and cancels this one. Schedule for Later saves the new giveaway and posts it at the date you set, replacing the active one at that time. Cancel keeps this giveaway running.</i>`
+  );
+}
+
+export function getGiveawaySchedulePromptMessage(draft) {
+  return (
+    `${e("CLOCK", "⏳")} <b>Set Post Date & Time</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `• <b>Giveaway:</b> ${draft.title}\n\n` +
+    `Send the date and time to post this giveaway, in Asia/Yangon time, or /cancel.\n` +
+    `Examples:\n` +
+    `<code>5 Nov 2026, 10:00 am</code>\n` +
+    `<code>2026-11-05 10:00</code>\n` +
+    `<code>05/11/2026 10:00</code>`
+  );
+}
+
+export function getGiveawayScheduledMessage(draft, scheduledAt) {
+  return (
+    `${e("DONE", "✅")} <b>Giveaway Scheduled</b>\n` +
+    `<b>━━━━━━━━━━━━━━━━━━━━</b>\n\n` +
+    `• <b>Giveaway:</b> ${draft.title}\n` +
+    `• <b>Prize:</b> ${formatGiveawayPrize(draft.prize_type, draft.prize_value)}\n` +
+    `• <b>Will be posted:</b> ${formatMyanmarTime(new Date(Number(scheduledAt)))}\n\n` +
+    `<i>It will replace the active giveaway at that time. It will not appear in the bot before then.</i>`
   );
 }
